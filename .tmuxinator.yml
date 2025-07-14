@@ -1,0 +1,16 @@
+name: patreon-podcast
+root: ./
+
+windows:
+  - server: 
+      panes:
+        - npm run dev:api
+  - ui: 
+      panes:
+        - cd src/ui && npm run dev
+  - worker:
+      panes:
+        - 
+  - logs:
+      panes:
+        -
