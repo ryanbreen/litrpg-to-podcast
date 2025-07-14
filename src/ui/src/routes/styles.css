@@ -1,0 +1,230 @@
+:root {
+  --color-bg-0: rgb(202, 216, 228);
+  --color-bg-1: rgb(255, 255, 255);
+  --color-bg-2: rgb(245, 245, 245);
+  --color-theme-1: rgb(70, 130, 180);
+  --color-theme-2: rgb(40, 80, 120);
+  --color-text: rgba(0, 0, 0, 0.7);
+  --column-width: 42rem;
+  --column-margin-top: 4rem;
+  font-family: Arial, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+}
+
+body {
+  min-height: 100vh;
+  margin: 0;
+  background-attachment: fixed;
+  background-color: var(--color-bg-1);
+  background-size: 100vw 100vh;
+  background-image: radial-gradient(
+    50% 50% at 20% 30%, 
+    var(--color-bg-0) 0%, 
+    transparent 50%
+  ),
+  radial-gradient(
+    60% 60% at 80% 70%, 
+    var(--color-bg-0) 0%, 
+    transparent 50%
+  );
+}
+
+h1, h2, p {
+  font-weight: 400;
+}
+
+p {
+  line-height: 1.5;
+}
+
+a {
+  color: var(--color-theme-1);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+h1 {
+  font-size: 2rem;
+  text-align: center;
+}
+
+h2 {
+  font-size: 1rem;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 2rem;
+  background: var(--color-bg-1);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+nav {
+  display: flex;
+  gap: 1rem;
+}
+
+nav a {
+  padding: 0.5rem 1rem;
+  border-radius: 4px;
+  transition: background-color 0.2s;
+}
+
+nav a:hover {
+  background-color: var(--color-bg-2);
+  text-decoration: none;
+}
+
+main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 1rem;
+  width: 100%;
+  max-width: var(--column-width);
+  margin: var(--column-margin-top) auto 0 auto;
+  box-sizing: border-box;
+}
+
+footer {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 2rem;
+}
+
+footer p {
+  color: var(--color-text);
+  font-size: 0.9rem;
+}
+
+.card {
+  background: var(--color-bg-1);
+  border-radius: 8px;
+  padding: 1.5rem;
+  margin-bottom: 1rem;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  border: 1px solid var(--color-bg-2);
+}
+
+.button {
+  display: inline-block;
+  padding: 0.75rem 1.5rem;
+  background: var(--color-theme-1);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  text-decoration: none;
+  font-size: 0.9rem;
+  transition: background-color 0.2s;
+}
+
+.button:hover {
+  background: var(--color-theme-2);
+  text-decoration: none;
+}
+
+.button:disabled {
+  background: #ccc;
+  cursor: not-allowed;
+}
+
+.button.secondary {
+  background: var(--color-bg-2);
+  color: var(--color-text);
+}
+
+.button.secondary:hover {
+  background: #ddd;
+}
+
+.status {
+  display: inline-block;
+  padding: 0.25rem 0.5rem;
+  border-radius: 12px;
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+.status.ready {
+  background: #d4edda;
+  color: #155724;
+}
+
+.status.pending {
+  background: #fff3cd;
+  color: #856404;
+}
+
+.status.processing {
+  background: #cce7ff;
+  color: #004085;
+}
+
+.status.error {
+  background: #f8d7da;
+  color: #721c24;
+}
+
+.episode-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.episode-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem;
+  background: var(--color-bg-1);
+  border-radius: 8px;
+  border: 1px solid var(--color-bg-2);
+}
+
+.episode-info h3 {
+  margin: 0 0 0.5rem 0;
+  font-size: 1.1rem;
+}
+
+.episode-info p {
+  margin: 0;
+  color: var(--color-text);
+  font-size: 0.9rem;
+}
+
+.episode-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+audio {
+  width: 300px;
+}
+
+.progress-bar {
+  width: 100%;
+  height: 4px;
+  background: var(--color-bg-2);
+  border-radius: 2px;
+  margin: 0.5rem 0;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--color-theme-1);
+  transition: width 0.3s ease;
+}
