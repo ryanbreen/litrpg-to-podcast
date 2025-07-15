@@ -1,4 +1,6 @@
 import OpenAI from 'openai';
+import fs from 'fs/promises';
+import path from 'path';
 import config from './config.js';
 
 class SpeakerIdentifier {
@@ -8,16 +10,57 @@ class SpeakerIdentifier {
     });
     this.server = null; // Set by API server for logging
     
-    // Pronunciation dictionary
-    this.pronunciationDict = {
-      'lvl': 'level',
-      'LVL': 'level',
-      'Lvl': 'level',
-      // Add more pronunciations as needed
-    };
-    
     // Special pause marker for TTS processing
     this.pauseMarker = '<pause3s>';
+    
+    // Initialize config - will be loaded from file
+    this.pronunciationDict = {};
+    this.characterAliases = {};
+    
+    // Load configuration
+    this.loadCharacterConfig();
+  }
+  
+  async loadCharacterConfig() {
+    try {
+      const configPath = path.join(process.cwd(), 'character-config.json');
+      const configData = await fs.readFile(configPath, 'utf-8');
+      const config = JSON.parse(configData);
+      
+      // Load pronunciations with case variations
+      this.pronunciationDict = {};
+      for (const [word, pronunciation] of Object.entries(config.pronunciations || {})) {
+        this.pronunciationDict[word] = pronunciation;
+        this.pronunciationDict[word.toLowerCase()] = pronunciation;
+        this.pronunciationDict[word.toUpperCase()] = pronunciation;
+        this.pronunciationDict[word.charAt(0).toUpperCase() + word.slice(1)] = pronunciation;
+      }
+      
+      // Load character aliases
+      this.characterAliases = config.characterAliases || {};
+      
+      this.log(`📚 Loaded character config: ${Object.keys(this.characterAliases).length} characters, ${Object.keys(config.pronunciations || {}).length} pronunciations`);
+      
+    } catch (error) {
+      // Use fallback configuration if file doesn't exist
+      this.pronunciationDict = {
+        'lvl': 'level',
+        'LVL': 'level',
+        'Lvl': 'level',
+        'malefic': 'muh-lef-ik',
+        'Malefic': 'muh-lef-ik',
+        'MALEFIC': 'muh-lef-ik'
+      };
+      
+      this.characterAliases = {
+        'Vilastromoz': {
+          aliases: ['Villy', 'the Malefic Viper', 'Vilas', 'Malefic Viper'],
+          description: 'Ancient Primordial, appears as both snake and humanoid form'
+        }
+      };
+      
+      this.log(`⚠️ Could not load character-config.json, using fallback configuration: ${error.message}`);
+    }
   }
   
   log(message, level = 'info') {
@@ -62,6 +105,23 @@ class SpeakerIdentifier {
     
     return false;
   }
+  
+  // Generate character alias context for GPT
+  generateCharacterContext() {
+    let context = '';
+    
+    if (Object.keys(this.characterAliases).length > 0) {
+      context += '\n\nIMPORTANT CHARACTER ALIASES:\n';
+      
+      for (const [mainName, data] of Object.entries(this.characterAliases)) {
+        context += `- ${mainName} (${data.description})\n`;
+        context += `  Also known as: ${data.aliases.join(', ')}\n`;
+        context += `  Use "${mainName}" as the consistent speaker name for all these aliases.\n\n`;
+      }
+    }
+    
+    return context;
+  }
 
   async identifySpeakers(chapterText, knownSpeakers = []) {
     // Preprocess the text before sending to OpenAI
@@ -73,9 +133,11 @@ class SpeakerIdentifier {
       .map(s => s.name)
       .join(', ');
 
+    const characterContext = this.generateCharacterContext();
+    
     const systemPrompt = `You are a dialogue attribution specialist. Your task is to split a story text into segments by speaker.
 
-Known characters from previous chapters: ${knownCharacters || 'None yet'}
+Known characters from previous chapters: ${knownCharacters || 'None yet'}${characterContext}
 
 Return JSON with this exact structure:
 {
@@ -101,6 +163,7 @@ CRITICAL RULES:
 5. For new characters not in the known list, use their name if clearly identified
 6. Split at natural breaks between speakers
 7. Types: "narration" (default), "dialogue", "thought"
+8. IMPORTANT: Use the main character name (not aliases) for consistency
 
 Be conservative - when in doubt, attribute to "narrator".`;
 
