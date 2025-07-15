@@ -79,6 +79,47 @@
     }
   }
   
+  async function checkAllSpeakersHaveVoices(chapterId) {
+    try {
+      const response = await fetch(`${API_URL}/api/chapters/${chapterId}/segments`);
+      if (!response.ok) return false;
+      
+      const data = await response.json();
+      const segments = data.segments || [];
+      
+      // Check if all speakers have voices assigned
+      for (const segmentData of segments) {
+        const segment = segmentData.segment;
+        if (!segment.voice_id) {
+          return false;
+        }
+      }
+      return true;
+    } catch (error) {
+      console.error('Error checking speaker voices:', error);
+      return false;
+    }
+  }
+  
+  function canClickStage(chapter, stage) {
+    switch(stage) {
+      case 'extract':
+        return true; // Can always click extract
+      case 'speakers':
+        return getStageStatus(chapter, 'extract') === 'completed';
+      case 'tts':
+        return getStageStatus(chapter, 'speakers') === 'completed';
+      case 'publish':
+        return getStageStatus(chapter, 'tts') === 'completed';
+      default:
+        return false;
+    }
+  }
+  
+  function getStageClickability(chapter, stage) {
+    return canClickStage(chapter, stage) ? 'clickable' : 'disabled';
+  }
+  
   function getStageClass(status) {
     switch(status) {
       case 'completed': return 'stage-completed';
@@ -385,6 +426,19 @@
     box-shadow: 0 4px 12px rgba(0,0,0,0.15);
   }
   
+  .stage.disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    background-color: #f5f5f5 !important;
+    color: #ccc !important;
+  }
+  
+  .stage.disabled:hover {
+    background-color: #f5f5f5 !important;
+    transform: none !important;
+    box-shadow: none !important;
+  }
+  
   .audio-info {
     font-size: 0.875rem;
     color: #666;
@@ -507,8 +561,12 @@
                 <div class="processing-stages">
                   <!-- Stage 1: Extract -->
                   <div 
-                    class="stage {getStageClass(getStageStatus(chapter, 'extract'))}"
-                    on:click={() => openLightbox(chapter, 'edit')}
+                    class="stage {getStageClass(getStageStatus(chapter, 'extract'))} {getStageClickability(chapter, 'extract')}"
+                    on:click={() => {
+                      if (canClickStage(chapter, 'extract')) {
+                        openLightbox(chapter, 'edit');
+                      }
+                    }}
                   >
                     <div class="stage-icon">📝</div>
                     <div class="stage-name">Extract</div>
@@ -519,8 +577,12 @@
                   
                   <!-- Stage 2: Speaker ID -->
                   <div 
-                    class="stage {getStageClass(getStageStatus(chapter, 'speakers'))}"
-                    on:click={() => openLightbox(chapter, 'speakers')}
+                    class="stage {getStageClass(getStageStatus(chapter, 'speakers'))} {getStageClickability(chapter, 'speakers')}"
+                    on:click={() => {
+                      if (canClickStage(chapter, 'speakers')) {
+                        openLightbox(chapter, 'speakers');
+                      }
+                    }}
                   >
                     <div class="stage-icon">🎭</div>
                     <div class="stage-name">Speaker ID</div>
@@ -531,8 +593,10 @@
                   
                   <!-- Stage 3: TTS -->
                   <div 
-                    class="stage {getStageClass(getStageStatus(chapter, 'tts'))}"
+                    class="stage {getStageClass(getStageStatus(chapter, 'tts'))} {getStageClickability(chapter, 'tts')}"
                     on:click={() => {
+                      if (!canClickStage(chapter, 'tts')) return;
+                      
                       if (getStageStatus(chapter, 'tts') === 'completed') {
                         // If TTS is already completed, open lightbox to view/debug
                         openLightbox(chapter, 'tts');
@@ -544,7 +608,7 @@
                         openLightbox(chapter, 'tts');
                       }
                     }}
-                    title={getStageStatus(chapter, 'tts') === 'completed' ? 'View TTS details and debug tools' : (getStageStatus(chapter, 'speakers') === 'completed' ? 'Click to generate audio' : 'View TTS status')}
+                    title={!canClickStage(chapter, 'tts') ? 'Complete previous stages first' : (getStageStatus(chapter, 'tts') === 'completed' ? 'View TTS details and debug tools' : (getStageStatus(chapter, 'speakers') === 'completed' ? 'Click to generate audio' : 'View TTS status'))}
                   >
                     <div class="stage-icon">🎙️</div>
                     <div class="stage-name">Generate</div>
@@ -555,8 +619,13 @@
                   
                   <!-- Stage 4: Publish -->
                   <div 
-                    class="stage {getStageClass(getStageStatus(chapter, 'publish'))}"
-                    on:click={() => openLightbox(chapter, 'publish')}
+                    class="stage {getStageClass(getStageStatus(chapter, 'publish'))} {getStageClickability(chapter, 'publish')}"
+                    on:click={() => {
+                      if (canClickStage(chapter, 'publish')) {
+                        openLightbox(chapter, 'publish');
+                      }
+                    }}
+                    title={!canClickStage(chapter, 'publish') ? 'Complete previous stages first' : 'View publish status'}
                   >
                     <div class="stage-icon">📡</div>
                     <div class="stage-name">Publish</div>

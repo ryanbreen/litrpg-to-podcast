@@ -1,5 +1,5 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { voicesStore, refreshVoices } from '../lib/stores.js';
   
   let characters = [];
@@ -11,13 +11,14 @@
   let showMergeDialog = false;
   let mergeFrom = null;
   let mergeTo = null;
+  let voicesPollInterval = null;
   
   const API_URL = 'http://localhost:8383';
   
   async function loadCharacters() {
     try {
       // Load both characters and voices in parallel
-      const [charactersResponse] = await Promise.all([
+      const [charactersResponse, voicesData] = await Promise.all([
         fetch(`${API_URL}/api/characters/dashboard`),
         refreshVoices()
       ]);
@@ -25,6 +26,8 @@
       if (!charactersResponse.ok) throw new Error('Failed to load characters');
       
       characters = await charactersResponse.json();
+      // Ensure voices are set locally as well
+      voices = voicesData;
     } catch (err) {
       error = err.message;
     } finally {
@@ -153,8 +156,31 @@
     affectedChapters = [];
   }
   
+  function startVoicesPolling() {
+    // Poll every 5 seconds to check for new voices
+    voicesPollInterval = setInterval(async () => {
+      try {
+        await refreshVoices();
+      } catch (err) {
+        console.error('Voices polling failed:', err);
+      }
+    }, 5000);
+  }
+  
+  function stopVoicesPolling() {
+    if (voicesPollInterval) {
+      clearInterval(voicesPollInterval);
+      voicesPollInterval = null;
+    }
+  }
+  
   onMount(() => {
     loadCharacters();
+    startVoicesPolling();
+  });
+  
+  onDestroy(() => {
+    stopVoicesPolling();
   });
 </script>
 
