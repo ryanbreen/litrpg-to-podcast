@@ -6,9 +6,68 @@ class SpeakerIdentifier {
     this.openai = new OpenAI({
       apiKey: config.openai.apiKey
     });
+    this.server = null; // Set by API server for logging
+    
+    // Pronunciation dictionary
+    this.pronunciationDict = {
+      'lvl': 'level',
+      'LVL': 'level',
+      'Lvl': 'level',
+      // Add more pronunciations as needed
+    };
+    
+    // Special pause marker for TTS processing
+    this.pauseMarker = '<pause3s>';
+  }
+  
+  log(message, level = 'info') {
+    if (this.server) {
+      this.server.log(message, level);
+    } else {
+      console.log(`[${level.toUpperCase()}] ${message}`);
+    }
+  }
+  
+  // Preprocess text for pronunciation and special markers
+  preprocessText(text) {
+    let processed = text;
+    
+    // Replace pronunciation dictionary entries
+    for (const [original, replacement] of Object.entries(this.pronunciationDict)) {
+      // Use word boundary regex to avoid partial replacements
+      const regex = new RegExp(`\\b${original}\\b`, 'g');
+      processed = processed.replace(regex, replacement);
+    }
+    
+    // Replace standalone "--" lines with pause markers
+    // Match lines that contain only "--" with optional whitespace
+    processed = processed.replace(/^\s*--\s*$/gm, this.pauseMarker);
+    
+    return processed;
+  }
+  
+  // Check if a line should be AI Announcer voice
+  isAIAnnouncer(text) {
+    const trimmed = text.trim();
+    
+    // Check if text is in brackets [like this]
+    if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+      return true;
+    }
+    
+    // Check if text starts with DING!
+    if (trimmed.startsWith('DING!')) {
+      return true;
+    }
+    
+    return false;
   }
 
   async identifySpeakers(chapterText, knownSpeakers = []) {
+    // Preprocess the text before sending to OpenAI
+    const preprocessedText = this.preprocessText(chapterText);
+    this.log(`📝 Preprocessing applied pronunciation dictionary and pause markers`);
+    
     const knownCharacters = knownSpeakers
       .filter(s => !s.is_narrator)
       .map(s => s.name)
@@ -56,7 +115,7 @@ Be conservative - when in doubt, attribute to "narrator".`;
           },
           {
             role: "user",
-            content: chapterText
+            content: preprocessedText
           }
         ],
         temperature: 0.1 // Lower temperature for more consistent results
@@ -69,7 +128,7 @@ Be conservative - when in doubt, attribute to "narrator".`;
         throw new Error('Invalid response format: missing segments array');
       }
 
-      // Validate each segment
+      // Validate each segment and check for AI Announcer
       for (let i = 0; i < result.segments.length; i++) {
         const segment = result.segments[i];
         if (!segment.speaker || !segment.text) {
@@ -78,16 +137,23 @@ Be conservative - when in doubt, attribute to "narrator".`;
         if (!segment.type) {
           segment.type = 'narration'; // Default type
         }
+        
+        // Check if this should be AI Announcer
+        if (segment.speaker === 'narrator' && this.isAIAnnouncer(segment.text)) {
+          segment.speaker = 'ai_announcer';
+          segment.type = 'announcement';
+          this.log(`🤖 Identified AI Announcer segment: "${segment.text.substring(0, 50)}..."`);
+        }
       }
 
-      // Verify all text is accounted for
+      // Verify all text is accounted for (compare with preprocessed text)
       const reconstructedText = result.segments.map(s => s.text).join('');
-      const originalTextNormalized = chapterText.replace(/\s+/g, ' ').trim();
+      const preprocessedNormalized = preprocessedText.replace(/\s+/g, ' ').trim();
       const reconstructedTextNormalized = reconstructedText.replace(/\s+/g, ' ').trim();
       
-      if (originalTextNormalized !== reconstructedTextNormalized) {
+      if (preprocessedNormalized !== reconstructedTextNormalized) {
         console.warn('Text reconstruction mismatch - some text may be missing or altered');
-        console.log('Original length:', originalTextNormalized.length);
+        console.log('Preprocessed length:', preprocessedNormalized.length);
         console.log('Reconstructed length:', reconstructedTextNormalized.length);
       }
 
@@ -97,21 +163,15 @@ Be conservative - when in doubt, attribute to "narrator".`;
       console.error('OpenAI speaker identification failed:', error);
       
       // Fallback: return entire text as narrator
+      const fallbackText = this.preprocessText(chapterText);
       return [{
         speaker: 'narrator',
-        text: chapterText,
+        text: fallbackText,
         type: 'narration'
       }];
     }
   }
 
-  log(message, level = 'info') {
-    if (this.server && this.server.log) {
-      this.server.log(message, level);
-    } else {
-      console.log(`[${level.toUpperCase()}] ${message}`);
-    }
-  }
 }
 
 export { SpeakerIdentifier };

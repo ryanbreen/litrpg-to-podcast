@@ -39,6 +39,13 @@ class MultiVoiceTTSWorker {
   }
 
   async generateSpeechSegment(text, voice, outputPath) {
+    // Check if this is a pause marker
+    if (text.trim() === '<pause3s>') {
+      this.log(`Creating 3-second pause...`);
+      await this.createSilence(3000, outputPath);
+      return;
+    }
+    
     this.log(`Generating speech segment (${text.length} chars) with voice ${voice.name}...`);
     
     // Parse settings if it's a string
@@ -181,21 +188,41 @@ class MultiVoiceTTSWorker {
     const speakerVoices = new Map();
     for (const segment of segments) {
       if (!speakerVoices.has(segment.speaker_id)) {
-        // Check if speaker has a voice assigned
-        if (!segment.voice_id) {
-          throw new Error(`Speaker "${segment.speaker_name}" has no voice assigned. Please assign voices to all speakers.`);
+        // Special handling for AI Announcer
+        if (segment.speaker_id === 'ai_announcer') {
+          // Check if we have a custom AI Announcer voice configured
+          let voice = await this.db.getVoiceForSpeaker('ai_announcer');
+          if (!voice) {
+            // Default to a robotic-sounding voice
+            this.log(`🤖 Using default AI Announcer voice (alloy)`);
+            voice = {
+              id: 'alloy',
+              name: 'AI Announcer (Default)',
+              provider: 'openai',
+              settings: {}
+            };
+          }
+          speakerVoices.set(segment.speaker_id, {
+            ...voice,
+            speaker_name: 'AI Announcer'
+          });
+        } else {
+          // Check if speaker has a voice assigned
+          if (!segment.voice_id) {
+            throw new Error(`Speaker "${segment.speaker_name}" has no voice assigned. Please assign voices to all speakers.`);
+          }
+          
+          // Load voice details
+          const voice = await this.db.getVoice(segment.voice_id);
+          if (!voice) {
+            throw new Error(`Voice ${segment.voice_id} not found for speaker ${segment.speaker_name}`);
+          }
+          
+          speakerVoices.set(segment.speaker_id, {
+            ...voice,
+            speaker_name: segment.speaker_name
+          });
         }
-        
-        // Load voice details
-        const voice = await this.db.getVoice(segment.voice_id);
-        if (!voice) {
-          throw new Error(`Voice ${segment.voice_id} not found for speaker ${segment.speaker_name}`);
-        }
-        
-        speakerVoices.set(segment.speaker_id, {
-          ...voice,
-          speaker_name: segment.speaker_name
-        });
       }
     }
 
@@ -252,6 +279,11 @@ class MultiVoiceTTSWorker {
           // Even longer pause for dialogue transitions
           if (segment.type === 'dialogue' && nextSegment.type === 'narration') {
             pauseDuration = 750;
+          }
+          
+          // Special pause for AI Announcer segments
+          if (segment.speaker_id === 'ai_announcer' || nextSegment.speaker_id === 'ai_announcer') {
+            pauseDuration = 1000; // 1 second pause around announcements
           }
           
           const pauseFile = path.join(segmentsDir, `pause_${i.toString().padStart(3, '0')}.mp3`);
@@ -446,6 +478,11 @@ class MultiVoiceTTSWorker {
             pauseDuration = 750;
           }
           
+          // Special pause for AI Announcer segments
+          if (segment.speaker_id === 'ai_announcer' || nextSegment.speaker_id === 'ai_announcer') {
+            pauseDuration = 1000;
+          }
+          
           await this.createSilence(pauseDuration, pauseFile);
           audioFiles.push(pauseFile);
         }
@@ -561,6 +598,11 @@ class MultiVoiceTTSWorker {
           
           if (segment.type === 'dialogue' && nextSegment.type === 'narration') {
             pauseDuration = 750;
+          }
+          
+          // Special pause for AI Announcer segments
+          if (segment.speaker_id === 'ai_announcer' || nextSegment.speaker_id === 'ai_announcer') {
+            pauseDuration = 1000;
           }
           
           debugOutput += `Pause status: MISSING - Creating ${pauseDuration}ms pause\n`;

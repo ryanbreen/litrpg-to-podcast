@@ -348,7 +348,9 @@ class Database {
         speakerName = 'narrator';
       }
       
-      const speaker = await this.getOrCreateSpeaker(speakerName, speakerName === 'narrator');
+      // AI Announcer is a special type of narrator
+      const isNarratorType = speakerName === 'narrator' || speakerName === 'ai_announcer';
+      const speaker = await this.getOrCreateSpeaker(speakerName, isNarratorType);
       
       const sql = `
         INSERT INTO chapter_segments (chapter_id, segment_index, speaker_id, text, type)
