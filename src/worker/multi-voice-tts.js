@@ -82,6 +82,13 @@ class MultiVoiceTTSWorker {
       
       this.log(`Using ElevenLabs voice ID: ${voiceId}`);
       
+      // Check if text is too long for ElevenLabs (10,000 character limit)
+      if (text.length > 10000) {
+        this.log(`Text too long for ElevenLabs (${text.length} chars), splitting into chunks...`);
+        await this.generateLongElevenLabsSegment(text, voice, voiceId, outputPath);
+        return;
+      }
+      
       const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
         method: 'POST',
         headers: {
@@ -111,6 +118,119 @@ class MultiVoiceTTSWorker {
     }
     
     return outputPath;
+  }
+
+  async generateLongElevenLabsSegment(text, voice, voiceId, outputPath) {
+    // Split text into chunks of max 9000 characters (leave buffer for safety)
+    const chunks = this.splitTextIntoChunks(text, 9000);
+    this.log(`Split into ${chunks.length} chunks for ElevenLabs`);
+    
+    const tempFiles = [];
+    
+    try {
+      // Generate audio for each chunk
+      for (let i = 0; i < chunks.length; i++) {
+        const chunk = chunks[i];
+        const tempFile = outputPath.replace('.mp3', `_chunk_${i}.mp3`);
+        
+        this.log(`Generating chunk ${i + 1}/${chunks.length} (${chunk.length} chars)...`);
+        
+        const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+          method: 'POST',
+          headers: {
+            'xi-api-key': config.elevenlabs.apiKey,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            text: chunk,
+            model_id: voice.settings?.model_id || 'eleven_monolingual_v1',
+            voice_settings: {
+              stability: 0.5,
+              similarity_boost: 0.5
+            }
+          })
+        });
+        
+        if (!response.ok) {
+          const error = await response.text();
+          throw new Error(`ElevenLabs TTS failed on chunk ${i + 1} (${response.status}): ${error}`);
+        }
+        
+        const buffer = Buffer.from(await response.arrayBuffer());
+        await fs.writeFile(tempFile, buffer);
+        tempFiles.push(tempFile);
+      }
+      
+      // Concatenate all chunks into final output
+      if (tempFiles.length > 1) {
+        await this.concatenateAudio(tempFiles, outputPath);
+      } else {
+        // Only one chunk, just rename it
+        await fs.rename(tempFiles[0], outputPath);
+      }
+      
+    } finally {
+      // Clean up temp files
+      for (const tempFile of tempFiles) {
+        try {
+          await fs.unlink(tempFile);
+        } catch (e) {
+          // Ignore cleanup errors
+        }
+      }
+    }
+  }
+  
+  splitTextIntoChunks(text, maxChars) {
+    const chunks = [];
+    let currentChunk = '';
+    
+    // Split by sentences first
+    const sentences = text.split(/([.!?]\s+)/);
+    
+    for (let i = 0; i < sentences.length; i++) {
+      const sentence = sentences[i];
+      
+      // If adding this sentence would exceed the limit, finalize current chunk
+      if (currentChunk.length + sentence.length > maxChars && currentChunk.length > 0) {
+        chunks.push(currentChunk.trim());
+        currentChunk = sentence;
+      } else {
+        currentChunk += sentence;
+      }
+    }
+    
+    // Add the last chunk if it has content
+    if (currentChunk.trim().length > 0) {
+      chunks.push(currentChunk.trim());
+    }
+    
+    // Handle edge case where a single sentence is still too long
+    const finalChunks = [];
+    for (const chunk of chunks) {
+      if (chunk.length <= maxChars) {
+        finalChunks.push(chunk);
+      } else {
+        // Force split by words if sentence is too long
+        const words = chunk.split(' ');
+        let wordChunk = '';
+        
+        for (const word of words) {
+          if (wordChunk.length + word.length + 1 > maxChars && wordChunk.length > 0) {
+            finalChunks.push(wordChunk.trim());
+            wordChunk = word;
+          } else {
+            wordChunk += (wordChunk ? ' ' : '') + word;
+          }
+        }
+        
+        if (wordChunk.trim().length > 0) {
+          finalChunks.push(wordChunk.trim());
+        }
+      }
+    }
+    
+    return finalChunks;
   }
 
   async createSilence(durationMs, outputPath) {
