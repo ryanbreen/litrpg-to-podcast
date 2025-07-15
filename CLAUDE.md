@@ -1,6 +1,19 @@
 # Claude Development Workflow for Patreon-to-Audio
 
-## 🚨 CRITICAL RULE #1: ALWAYS RESTART AFTER CODE CHANGES 🚨
+## 🚨 CRITICAL RULE #1: NEVER COMMIT ON MAIN BRANCH 🚨
+
+**MANDATORY**: Always create a feature branch for any changes. NEVER commit directly to main.
+
+```bash
+# Always do this:
+git checkout -b feat/your-feature-name
+# Make changes
+git add .
+git commit -m "Your commit message"
+git push origin feat/your-feature-name
+```
+
+## 🚨 CRITICAL RULE #2: ALWAYS RESTART AFTER CODE CHANGES 🚨
 
 **MANDATORY**: After editing ANY code file, you MUST restart the affected service:
 

@@ -297,7 +297,10 @@ class PatreonScraper {
     }
 
     // Clean up the content
-    return this.cleanContent(content);
+    const cleanedContent = this.cleanContent(content);
+    
+    // Extract chapter number and add end marker
+    return this.addChapterEndMarker(cleanedContent);
   }
 
   cleanContent(content) {
@@ -323,6 +326,33 @@ class PatreonScraper {
     cleaned = cleaned.trim();
     
     return cleaned;
+  }
+
+  addChapterEndMarker(content) {
+    // Try to extract chapter number from the content
+    const chapterMatch = content.match(/Chapter\s+(\d+)/i);
+    
+    if (chapterMatch) {
+      const chapterNumber = chapterMatch[1];
+      const endMarker = `\n\nEnd of Chapter ${chapterNumber}`;
+      
+      this.log(`Adding end marker: "End of Chapter ${chapterNumber}"`);
+      return content + endMarker;
+    } else {
+      // Fallback: try to extract from any numeric pattern at the start
+      const numericMatch = content.match(/^\s*(\d+)/);
+      if (numericMatch) {
+        const chapterNumber = numericMatch[1];
+        const endMarker = `\n\nEnd of Chapter ${chapterNumber}`;
+        
+        this.log(`Adding end marker (fallback): "End of Chapter ${chapterNumber}"`);
+        return content + endMarker;
+      }
+    }
+    
+    // If no chapter number found, add generic end marker
+    this.log('No chapter number found, adding generic end marker');
+    return content + '\n\nEnd of Chapter';
   }
 
   async scrapeChapterByUrl(url) {

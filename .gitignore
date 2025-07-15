@@ -12,8 +12,7 @@ src/ui/node_modules/
 .patreon-session.bak/
 
 # Generated audio and data files
-public/audio/
-public/data/
+public/
 db/chapters.db
 db/jobs.db
 *.mp3

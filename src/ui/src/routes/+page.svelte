@@ -485,13 +485,18 @@
                   <div 
                     class="stage {getStageClass(getStageStatus(chapter, 'tts'))}"
                     on:click={() => {
-                      if (getStageStatus(chapter, 'speakers') === 'completed') {
+                      if (getStageStatus(chapter, 'tts') === 'completed') {
+                        // If TTS is already completed, open lightbox to view/debug
+                        openLightbox(chapter, 'tts');
+                      } else if (getStageStatus(chapter, 'speakers') === 'completed') {
+                        // If speakers completed but TTS not, generate audio
                         generateAudio(chapter.id);
                       } else {
+                        // Otherwise open lightbox
                         openLightbox(chapter, 'tts');
                       }
                     }}
-                    title={getStageStatus(chapter, 'speakers') === 'completed' ? 'Click to generate audio' : 'View TTS status'}
+                    title={getStageStatus(chapter, 'tts') === 'completed' ? 'View TTS details and debug tools' : (getStageStatus(chapter, 'speakers') === 'completed' ? 'Click to generate audio' : 'View TTS status')}
                   >
                     <div class="stage-icon">🎙️</div>
                     <div class="stage-name">Generate</div>
