@@ -250,4 +250,42 @@ npm run tmux logs server
 
 **NEVER create narrow layouts** - always use the full width patterns above.
 
+## Character Aliases and Pronunciations
+
+### Character Configuration File
+
+The system uses `character-config.json` to manage character aliases and pronunciation rules:
+
+```json
+{
+  "characterAliases": {
+    "Vilastromoz": {
+      "aliases": ["Villy", "the Malefic Viper", "Vilas", "Malefic Viper"],
+      "description": "Ancient Primordial, appears as both snake and humanoid form"
+    }
+  },
+  "pronunciations": {
+    "lvl": "level",
+    "malefic": "muh-lef-ik"
+  }
+}
+```
+
+### Adding New Characters and Pronunciations
+
+**Character Aliases:**
+- Add characters who have multiple names/nicknames
+- GPT will use the main character name consistently
+- Improves speaker identification accuracy
+
+**Pronunciations:**
+- Fix common mispronunciations in TTS
+- Automatically generates case variations (lvl, LVL, Lvl)
+- Applied during text preprocessing before TTS
+
+### Usage
+1. Edit `character-config.json` 
+2. Restart server: `npm run tmux restart server`
+3. Changes apply to all new speaker identification
+
 Remember: **Always use the tmux manager, never start processes manually!**
