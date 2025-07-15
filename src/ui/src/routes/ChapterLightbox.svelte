@@ -1,5 +1,6 @@
 <script>
-  import { createEventDispatcher } from 'svelte';
+  import { createEventDispatcher, onMount, onDestroy } from 'svelte';
+  import { voicesStore, refreshVoices } from '../lib/stores.js';
   
   export let chapter;
   export let mode;
@@ -24,11 +25,33 @@
   let rebuilding = false;
   let debugMerging = false;
   let mergeDebugOutput = '';
+  let voicesPollInterval = null;
   
   $: if (mode === 'edit') loadChapterText();
   $: if (mode === 'speakers') loadSpeakers();
   $: if (mode === 'tts') loadTTSInfo();
   $: if (mode === 'publish') loadPublishInfo();
+  
+  // Subscribe to voices store for real-time updates
+  voicesStore.subscribe(value => {
+    voices = value;
+  });
+  
+  // Start polling when component mounts
+  onMount(() => {
+    startVoicesPolling();
+  });
+  
+  // Stop polling when component destroys
+  onDestroy(() => {
+    stopVoicesPolling();
+  });
+  
+  // Restart polling when mode changes
+  $: if (mode) {
+    stopVoicesPolling();
+    startVoicesPolling();
+  }
   
   async function loadChapterText() {
     loading = true;
@@ -146,19 +169,18 @@
     loading = true;
     try {
       // Load segments, speakers, and voices in parallel
-      const [segmentsResponse, speakersResponse, voicesResponse] = await Promise.all([
+      const [segmentsResponse, speakersResponse, voicesData] = await Promise.all([
         fetch(`${API_URL}/api/chapters/${chapter.id}/segments`),
         fetch(`${API_URL}/api/speakers`),
-        fetch(`${API_URL}/api/voices`)
+        refreshVoices()
       ]);
       
       if (!segmentsResponse.ok) throw new Error('Failed to load chapter segments');
       if (!speakersResponse.ok) throw new Error('Failed to load speakers');
-      if (!voicesResponse.ok) throw new Error('Failed to load voices');
       
       const segmentsData = await segmentsResponse.json();
       const allSpeakers = await speakersResponse.json();
-      voices = await voicesResponse.json();
+      voices = voicesData;
       
       // Extract segments array from response
       const segments = segmentsData.segments || [];
@@ -616,7 +638,28 @@
     }
   }
 
+  function startVoicesPolling() {
+    if (mode === 'speakers') {
+      // Poll every 3 seconds for voices when in speakers mode
+      voicesPollInterval = setInterval(async () => {
+        try {
+          await refreshVoices();
+        } catch (err) {
+          console.error('Voices polling failed:', err);
+        }
+      }, 3000);
+    }
+  }
+  
+  function stopVoicesPolling() {
+    if (voicesPollInterval) {
+      clearInterval(voicesPollInterval);
+      voicesPollInterval = null;
+    }
+  }
+  
   function close() {
+    stopVoicesPolling();
     dispatch('close');
   }
   
