@@ -5,6 +5,8 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import config from '../shared/config.js';
 import { Database } from '../shared/database.js';
+import { RSSGenerator } from '../shared/rss-generator.js';
+import { S3Sync } from '../shared/s3-sync.js';
 
 const execAsync = promisify(exec);
 
@@ -466,6 +468,9 @@ class MultiVoiceTTSWorker {
       this.log(`   File size: ${(fileSize / 1024 / 1024).toFixed(1)}MB`);
       this.log(`   Voices used: ${speakerBreakdown}`);
       
+      // Publish this chapter immediately
+      await this.publishChapter(chapterId);
+      
       return outputFile;
 
     } finally {
@@ -822,6 +827,40 @@ class MultiVoiceTTSWorker {
     }
     
     return segmentFiles;
+  }
+
+  async publishChapter(chapterId) {
+    try {
+      this.log(`📡 Publishing chapter ${chapterId}...`);
+      
+      // Generate updated RSS feed
+      const rssGenerator = new RSSGenerator();
+      await rssGenerator.generateFeed();
+      await rssGenerator.generateEpisodeList();
+      
+      // Set up S3 sync
+      const s3Sync = new S3Sync();
+      s3Sync.server = this.server;
+      
+      // Sync the chapter's MP3 file
+      const audioFile = path.join(config.paths.output, `${chapterId}.mp3`);
+      const s3AudioPath = `${config.s3.prefix}audio/${chapterId}.mp3`;
+      
+      await s3Sync.copyFileToS3(audioFile, s3AudioPath);
+      
+      // Sync the updated feed files
+      const feedFile = path.join(config.paths.public, 'feed.xml');
+      const episodesFile = path.join(config.paths.public, 'episodes.json');
+      
+      await s3Sync.copyFileToS3(feedFile, `${config.s3.prefix}feed.xml`);
+      await s3Sync.copyFileToS3(episodesFile, `${config.s3.prefix}episodes.json`);
+      
+      this.log(`✅ Published chapter ${chapterId} to S3`);
+      
+    } catch (error) {
+      this.log(`❌ Failed to publish chapter ${chapterId}: ${error.message}`, 'error');
+      throw error;
+    }
   }
 
   async close() {

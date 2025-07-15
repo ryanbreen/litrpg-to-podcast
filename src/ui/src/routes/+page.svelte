@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import ChapterLightbox from './ChapterLightbox.svelte';
   import GenerationProgressLightbox from './GenerationProgressLightbox.svelte';
+  import { chaptersStore, refreshChapters } from '../lib/stores.js';
   
   let chapters = [];
   let loading = true;
@@ -17,10 +18,7 @@
   
   async function loadChapters() {
     try {
-      const response = await fetch(`${API_URL}/api/chapters`);
-      if (!response.ok) throw new Error('Failed to fetch chapters');
-      
-      const data = await response.json();
+      const data = await refreshChapters();
       chapters = data;
       sortChapters();
       loading = false;
@@ -29,6 +27,12 @@
       loading = false;
     }
   }
+  
+  // Subscribe to chapters store for real-time updates
+  chaptersStore.subscribe(value => {
+    chapters = value;
+    sortChapters();
+  });
   
   function sortChapters() {
     chapters = chapters.sort((a, b) => {
@@ -56,7 +60,7 @@
   function closeLightbox() {
     selectedChapter = null;
     lightboxMode = null;
-    loadChapters(); // Reload in case of changes
+    refreshChapters(); // Reload in case of changes
   }
   
   function getStageStatus(chapter, stage) {
@@ -122,7 +126,7 @@
       const result = await response.json();
       
       // Reload chapters to show the new one
-      await loadChapters();
+      await refreshChapters();
       
     } catch (err) {
       error = err.message;

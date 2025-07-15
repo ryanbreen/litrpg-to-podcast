@@ -1,5 +1,6 @@
 <script>
   import { onMount } from 'svelte';
+  import { voicesStore, refreshVoices } from '../lib/stores.js';
   
   let voices = [];
   let loading = true;
@@ -30,15 +31,18 @@
   
   async function loadVoices() {
     try {
-      const response = await fetch(`${API_URL}/api/voices`);
-      if (!response.ok) throw new Error('Failed to load voices');
-      voices = await response.json();
+      voices = await refreshVoices();
     } catch (err) {
       error = err.message;
     } finally {
       loading = false;
     }
   }
+  
+  // Subscribe to voices store for real-time updates
+  voicesStore.subscribe(value => {
+    voices = value;
+  });
   
   async function createVoice() {
     try {
