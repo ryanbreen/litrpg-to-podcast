@@ -1,5 +1,5 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import ChapterLightbox from './ChapterLightbox.svelte';
   import GenerationProgressLightbox from './GenerationProgressLightbox.svelte';
   import { chaptersStore, refreshChapters } from '../lib/stores.js';
@@ -13,6 +13,7 @@
   let loadingNext = false;
   let showGenerationProgress = false;
   let generatingChapter = null;
+  let pollInterval = null;
   
   const API_URL = 'http://localhost:8383';
   
@@ -114,6 +115,8 @@
     if (loadingNext) return;
     
     loadingNext = true;
+    const initialChapterCount = chapters.length;
+    
     try {
       const response = await fetch(`${API_URL}/api/chapters/load-next`, {
         method: 'POST',
@@ -125,8 +128,26 @@
       
       const result = await response.json();
       
-      // Reload chapters to show the new one
-      await refreshChapters();
+      // Poll more frequently until we see a new chapter
+      const pollForNewChapter = async () => {
+        const maxAttempts = 30; // 30 seconds max
+        let attempts = 0;
+        
+        while (attempts < maxAttempts) {
+          await refreshChapters();
+          
+          // Check if we have a new chapter
+          if (chapters.length > initialChapterCount) {
+            break;
+          }
+          
+          // Wait 1 second before next check
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          attempts++;
+        }
+      };
+      
+      await pollForNewChapter();
       
     } catch (err) {
       error = err.message;
@@ -186,8 +207,31 @@
     loadChapters(); // Refresh chapters when closing
   }
   
+  function startPolling() {
+    // Poll every 10 seconds to check for new chapters
+    pollInterval = setInterval(async () => {
+      try {
+        await refreshChapters();
+      } catch (err) {
+        console.error('Polling failed:', err);
+      }
+    }, 10000);
+  }
+  
+  function stopPolling() {
+    if (pollInterval) {
+      clearInterval(pollInterval);
+      pollInterval = null;
+    }
+  }
+  
   onMount(() => {
     loadChapters();
+    startPolling();
+  });
+  
+  onDestroy(() => {
+    stopPolling();
   });
 </script>
 
