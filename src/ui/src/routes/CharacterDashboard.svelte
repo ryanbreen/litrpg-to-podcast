@@ -1,5 +1,6 @@
 <script>
   import { onMount } from 'svelte';
+  import { voicesStore, refreshVoices } from '../lib/stores.js';
   
   let characters = [];
   let voices = [];
@@ -16,22 +17,25 @@
   async function loadCharacters() {
     try {
       // Load both characters and voices in parallel
-      const [charactersResponse, voicesResponse] = await Promise.all([
+      const [charactersResponse] = await Promise.all([
         fetch(`${API_URL}/api/characters/dashboard`),
-        fetch(`${API_URL}/api/voices`)
+        refreshVoices()
       ]);
       
       if (!charactersResponse.ok) throw new Error('Failed to load characters');
-      if (!voicesResponse.ok) throw new Error('Failed to load voices');
       
       characters = await charactersResponse.json();
-      voices = await voicesResponse.json();
     } catch (err) {
       error = err.message;
     } finally {
       loading = false;
     }
   }
+  
+  // Subscribe to voices store for real-time updates
+  voicesStore.subscribe(value => {
+    voices = value;
+  });
   
   async function assignVoice(speakerId, voiceId, voiceName) {
     try {
