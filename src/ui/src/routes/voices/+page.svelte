@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte';
-  import { voicesStore, refreshVoices } from '../lib/stores.js';
+  import { voicesStore, refreshVoices } from '../../lib/stores.js';
   
   let voices = [];
   let loading = true;
