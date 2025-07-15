@@ -121,7 +121,7 @@ class MultiVoiceTTSWorker {
     await fs.writeFile(concatFile, fileList);
 
     try {
-      const command = `ffmpeg -f concat -safe 0 -i "${concatFile}" -c copy "${outputPath}" -y`;
+      const command = `ffmpeg -f concat -safe 0 -i "${concatFile}" -af "aresample=44100,aformat=sample_fmts=fltp:channel_layouts=mono" -c:a libmp3lame -b:a 128k "${outputPath}" -y`;
       await execAsync(command);
     } finally {
       // Clean up concat file
@@ -591,9 +591,10 @@ class MultiVoiceTTSWorker {
     debugOutput += `File list saved to: ${fileListPath}\n`;
     debugOutput += `File list contents:\n${fileListContent}\n\n`;
     
-    // Run ffmpeg with verbose output
-    const ffmpegCmd = `ffmpeg -f concat -safe 0 -i "${fileListPath}" -c copy -y "${outputFile}" -v verbose`;
+    // Run ffmpeg with verbose output and re-encoding to ensure consistent format
+    const ffmpegCmd = `ffmpeg -f concat -safe 0 -i "${fileListPath}" -af "aresample=44100,aformat=sample_fmts=fltp:channel_layouts=mono" -c:a libmp3lame -b:a 128k -y "${outputFile}" -v verbose`;
     debugOutput += `Command: ${ffmpegCmd}\n\n`;
+    debugOutput += `Note: Using re-encoding with audio filtering to normalize channels and sample rate\n\n`;
     
     try {
       const { stdout, stderr } = await execAsync(ffmpegCmd);

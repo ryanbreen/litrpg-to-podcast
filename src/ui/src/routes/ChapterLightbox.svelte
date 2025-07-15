@@ -182,7 +182,7 @@
         speakerMap[speakerName].occurrences++;
         speakerMap[speakerName].segments.push({
           index: segment.segment_index,
-          text: segment.text && segment.text.length > 100 ? segment.text.substring(0, 100) + '...' : (segment.text || ''),
+          text: segment.text || '',
           fullText: segment.text || '',
           type: segment.type
         });
@@ -471,6 +471,78 @@
       error = err.message;
     } finally {
       loading = false;
+    }
+  }
+
+  let fullChapterAudio = null;
+  
+  async function playFullChapter() {
+    if (!fullChapterAudio) {
+      const audioUrl = `${API_URL}/api/audio/${chapter.id}/${chapter.id}.mp3`;
+      fullChapterAudio = new Audio(audioUrl);
+      
+      fullChapterAudio.addEventListener('error', (e) => {
+        console.error('Full chapter audio playback error:', e);
+        error = 'Failed to play full chapter audio';
+      });
+    }
+    
+    if (fullChapterAudio.paused) {
+      try {
+        await fullChapterAudio.play();
+      } catch (err) {
+        console.error('Failed to play full chapter:', err);
+        error = 'Failed to play audio';
+      }
+    } else {
+      fullChapterAudio.pause();
+    }
+  }
+
+  // Store audio elements for segments
+  let segmentAudios = {};
+  
+  async function playSegment(segmentIndex) {
+    if (previewingSegments.has(segmentIndex)) {
+      // Stop the audio
+      const audio = segmentAudios[segmentIndex];
+      if (audio) {
+        audio.pause();
+        audio.currentTime = 0;
+      }
+      previewingSegments.delete(segmentIndex);
+      previewingSegments = previewingSegments;
+      return;
+    }
+    
+    previewingSegments.add(segmentIndex);
+    previewingSegments = previewingSegments;
+    
+    const audioUrl = `${API_URL}/api/audio/${chapter.id}/segment_${segmentIndex.toString().padStart(3, '0')}.mp3`;
+    
+    // Create audio element if it doesn't exist
+    if (!segmentAudios[segmentIndex]) {
+      const audio = new Audio(audioUrl);
+      segmentAudios[segmentIndex] = audio;
+      
+      audio.addEventListener('ended', () => {
+        previewingSegments.delete(segmentIndex);
+        previewingSegments = previewingSegments;
+      });
+      
+      audio.addEventListener('error', (e) => {
+        console.error('Audio playback error:', e);
+        previewingSegments.delete(segmentIndex);
+        previewingSegments = previewingSegments;
+      });
+    }
+    
+    try {
+      await segmentAudios[segmentIndex].play();
+    } catch (err) {
+      console.error('Failed to play audio:', err);
+      previewingSegments.delete(segmentIndex);
+      previewingSegments = previewingSegments;
     }
   }
 
@@ -893,6 +965,8 @@
   .segment-text {
     font-style: italic;
     flex: 1;
+    white-space: pre-wrap;
+    line-height: 1.4;
   }
   
   .more-segments {
@@ -926,6 +1000,7 @@
     flex-direction: column;
     gap: 1.5rem;
     height: 100%;
+    overflow: hidden;
   }
   
   .tts-summary {
@@ -1001,18 +1076,68 @@
     cursor: not-allowed;
   }
   
+  .debug-button {
+    background: #FF9800;
+    color: white;
+    border: none;
+    padding: 0.75rem 1.5rem;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.875rem;
+    font-weight: 500;
+    transition: background 0.2s;
+  }
+  
+  .debug-button:hover:not(:disabled) {
+    background: #F57C00;
+  }
+  
+  .debug-button:disabled {
+    background: #ccc;
+    cursor: not-allowed;
+  }
+  
+  .play-button {
+    background: #9C27B0;
+    color: white;
+    border: none;
+    padding: 0.75rem 1.5rem;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.875rem;
+    font-weight: 500;
+    transition: background 0.2s;
+  }
+  
+  .play-button:hover {
+    background: #7B1FA2;
+  }
+  
+  .tts-bottom-section {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    overflow: hidden;
+  }
+  
   .segments-cache {
     flex: 1;
     min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
   }
   
   .segments-cache h3 {
     margin: 0 0 1rem 0;
     color: #333;
+    flex-shrink: 0;
   }
   
   .segments-list {
-    max-height: 400px;
+    flex: 1;
     overflow-y: auto;
     border: 1px solid #e0e0e0;
     border-radius: 6px;
@@ -1065,6 +1190,8 @@
     color: #333;
     margin-bottom: 0.25rem;
     word-break: break-word;
+    white-space: pre-wrap;
+    line-height: 1.4;
   }
   
   .segment-meta {
@@ -1119,6 +1246,31 @@
   .regenerate-button:disabled {
     background: #ccc;
     cursor: not-allowed;
+  }
+  
+  .play-segment-button {
+    background: #4CAF50;
+    color: white;
+    border: none;
+    padding: 0.5rem;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.875rem;
+    transition: background 0.2s;
+    min-width: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-right: 0.5rem;
+  }
+  
+  .play-segment-button:hover:not(:disabled) {
+    background: #45a049;
+  }
+  
+  .play-segment-button:disabled {
+    background: #2196F3;
+    cursor: pointer;
   }
   
   .tts-pending {
@@ -1348,6 +1500,34 @@
   .secondary-button:hover {
     background: #e0e0e0;
   }
+  
+  .debug-output {
+    background: #f5f5f5;
+    padding: 1rem;
+    border-radius: 6px;
+    max-height: 300px;
+    overflow-y: auto;
+    flex-shrink: 0;
+  }
+  
+  .debug-output h3 {
+    margin: 0 0 0.5rem 0;
+    color: #333;
+  }
+  
+  .debug-output pre {
+    margin: 0;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    font-family: 'Courier New', monospace;
+    font-size: 0.875rem;
+    line-height: 1.4;
+    color: #333;
+    background: white;
+    padding: 1rem;
+    border-radius: 4px;
+    border: 1px solid #e0e0e0;
+  }
 </style>
 
 <svelte:window on:keydown={handleKeydown} />
@@ -1572,6 +1752,14 @@
                   {/if}
                 </div>
                 
+                <!-- DEBUG: Show cached segments length -->
+                <div style="background: #f0f0f0; padding: 8px; margin: 8px 0; font-family: monospace; font-size: 12px;">
+                  DEBUG: cachedSegments.length = {cachedSegments.length}
+                  {#if cachedSegments.length > 0}
+                    <br>First segment: {JSON.stringify(cachedSegments[0]?.segment?.text?.substring(0, 50) || 'undefined')}
+                  {/if}
+                </div>
+                
                 {#if cachedSegments.length > 0}
                   <div class="tts-actions">
                     <button 
@@ -1597,70 +1785,95 @@
                         🐛 Debug Merge
                       {/if}
                     </button>
+                    
+                    {#if chapter.processedAt}
+                      <button 
+                        class="play-button"
+                        on:click={() => playFullChapter()}
+                        title="Play full chapter audio"
+                      >
+                        🎧 Play Full Chapter
+                      </button>
+                    {/if}
                   </div>
                 {/if}
               </div>
               
-              {#if cachedSegments.length > 0}
-                <div class="segments-cache">
-                  <h3>Cached Segments</h3>
-                  <div class="segments-list">
-                    {#each cachedSegments as segmentFile, index}
-                      <div class="segment-cache-item">
-                        <div class="segment-info">
-                          <div class="segment-index">#{index + 1}</div>
-                          <div class="segment-details">
-                            <div class="segment-text">
-                              {segmentFile.segment.text.length > 80 ? 
-                                segmentFile.segment.text.substring(0, 80) + '...' : 
-                                segmentFile.segment.text}
+              <div class="tts-bottom-section">
+                {#if mergeDebugOutput}
+                  <div class="debug-output">
+                    <h3>Debug Output</h3>
+                    <pre>{mergeDebugOutput}</pre>
+                  </div>
+                {/if}
+                
+                {#if cachedSegments.length > 0}
+                  <div class="segments-cache">
+                    <h3>Cached Segments</h3>
+                    <div class="segments-list">
+                      {#each cachedSegments as segmentFile, index}
+                        <div class="segment-cache-item">
+                          <div class="segment-info">
+                            <div class="segment-index">#{index + 1}</div>
+                            <div class="segment-details">
+                              <div class="segment-text">
+                                {segmentFile.segment.text}
+                              </div>
+                              <div class="segment-meta">
+                                Speaker: {segmentFile.segment.speaker_name} • 
+                                Type: {segmentFile.segment.type} • 
+                                {#if segmentFile.exists}
+                                  Size: {(segmentFile.size / 1024).toFixed(1)}KB
+                                {:else}
+                                  Not generated
+                                {/if}
+                              </div>
                             </div>
-                            <div class="segment-meta">
-                              Speaker: {segmentFile.segment.speaker_name} • 
-                              Type: {segmentFile.segment.type} • 
-                              {#if segmentFile.exists}
-                                Size: {(segmentFile.size / 1024).toFixed(1)}KB
-                              {:else}
-                                Not generated
-                              {/if}
-                            </div>
-                          </div>
-                        </div>
-                        
-                        <div class="segment-actions">
-                          <div class="segment-status {segmentFile.exists ? 'cached' : 'missing'}">
-                            {#if segmentFile.exists}
-                              ✅ Cached
-                            {:else}
-                              ❌ Missing
-                            {/if}
                           </div>
                           
-                          <button 
-                            class="regenerate-button"
-                            on:click={() => regenerateSegment(index)}
-                            disabled={regeneratingSegments.has(index)}
-                            title="Regenerate this segment"
-                          >
-                            {#if regeneratingSegments.has(index)}
-                              ⏳
-                            {:else}
-                              🔄
+                          <div class="segment-actions">
+                            <div class="segment-status {segmentFile.exists ? 'cached' : 'missing'}">
+                              {#if segmentFile.exists}
+                                ✅ Cached
+                              {:else}
+                                ❌ Missing
+                              {/if}
+                            </div>
+                            
+                            {#if segmentFile.exists}
+                              <button 
+                                class="play-segment-button"
+                                on:click={() => playSegment(index)}
+                                disabled={previewingSegments.has(index)}
+                                title="Play this segment"
+                              >
+                                {#if previewingSegments.has(index)}
+                                  ⏸️
+                                {:else}
+                                  ▶️
+                                {/if}
+                              </button>
                             {/if}
-                          </button>
+                            
+                            <button 
+                              class="regenerate-button"
+                              on:click={() => regenerateSegment(index)}
+                              disabled={regeneratingSegments.has(index)}
+                              title="Regenerate this segment"
+                            >
+                              {#if regeneratingSegments.has(index)}
+                                ⏳
+                              {:else}
+                                🔄
+                              {/if}
+                            </button>
+                          </div>
                         </div>
-                      </div>
-                    {/each}
+                      {/each}
+                    </div>
                   </div>
-                </div>
-              {/if}
-              
-              {#if mergeDebugOutput}
-                <div class="debug-output">
-                  <h3>Debug Output</h3>
-                  <pre>{mergeDebugOutput}</pre>
-                </div>
-              {/if}
+                {/if}
+              </div>
             </div>
           {/if}
         </div>
