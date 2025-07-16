@@ -451,15 +451,51 @@ class APIServer {
         const chapterId = request.params.id;
         this.log(`🎭 Identifying speakers for chapter ${chapterId}`);
         
-        await this.processChapterSpeakerIdentification(chapterId);
+        // Initialize progress tracking
+        this.speakerIdProgress = this.speakerIdProgress || {};
+        this.speakerIdProgress[chapterId] = {
+          status: 'starting',
+          phase: 'loading',
+          message: 'Loading chapter content...',
+          startedAt: new Date().toISOString(),
+          completed: false,
+          error: null,
+          segments: null,
+          speakerCounts: null
+        };
+        
+        // Process in background
+        this.processChapterSpeakerIdentification(chapterId);
         
         return { 
           success: true, 
-          message: 'Speaker identification complete',
+          message: 'Speaker identification started',
           chapterId 
         };
       } catch (error) {
         this.log(`Speaker identification failed for ${request.params.id}: ${error.message}`, 'error');
+        reply.code(500);
+        return { error: error.message };
+      }
+    });
+    
+    // Get speaker identification progress
+    this.fastify.get('/api/chapters/:id/speaker-id-progress', async (request, reply) => {
+      try {
+        const chapterId = request.params.id;
+        
+        if (!this.speakerIdProgress || !this.speakerIdProgress[chapterId]) {
+          return {
+            status: 'not_started',
+            phase: null,
+            message: null,
+            completed: false,
+            error: null
+          };
+        }
+        
+        return this.speakerIdProgress[chapterId];
+      } catch (error) {
         reply.code(500);
         return { error: error.message };
       }
@@ -1293,8 +1329,23 @@ class APIServer {
         }
         
         this.log(`Stage 1 complete: ${newChapters.length} chapters extracted`);
+        
+        // Automatically start speaker identification for extracted chapters
+        this.log(`🎭 Automatically starting Stage 2: Speaker identification for ${newChapters.length} chapters...`);
+        let speakerIdSuccess = 0;
+        
+        for (const chapter of newChapters) {
+          try {
+            await this.processChapterSpeakerIdentification(chapter.id);
+            speakerIdSuccess++;
+            this.log(`✅ Speaker identification completed for: ${chapter.title}`);
+          } catch (error) {
+            this.log(`⚠️ Speaker identification failed for ${chapter.title}: ${error.message}`, 'warning');
+          }
+        }
+        
+        this.log(`🎭 Stage 2 complete: ${speakerIdSuccess}/${newChapters.length} chapters processed`);
         this.log(`Next steps:`);
-        this.log(`  - Stage 2: Identify speakers in extracted chapters`);
         this.log(`  - Stage 3: Generate multi-voice TTS`); 
         this.log(`  - Stage 4: Publish to S3`);
       } else {
@@ -1324,6 +1375,15 @@ class APIServer {
       if (chapterData) {
         // Save to database
         await this.db.upsertChapter(chapterData);
+        
+        // Automatically start speaker identification
+        this.log(`🎭 Automatically starting speaker identification for loaded chapter...`);
+        try {
+          await this.processChapterSpeakerIdentification(chapterData.id);
+          this.log(`✅ Speaker identification completed for: ${chapterData.title}`);
+        } catch (error) {
+          this.log(`⚠️ Speaker identification failed: ${error.message}`, 'warning');
+        }
         this.log(`✅ Successfully loaded chapter: ${chapterData.title}`);
         this.log(`📝 Content length: ${chapterData.content?.length || 0} characters`);
         
@@ -1367,6 +1427,16 @@ class APIServer {
         const dataFile = path.join(config.paths.data, `${chapterId}.json`);
         await fs.writeFile(dataFile, JSON.stringify(chapterData, null, 2));
         this.log(`💾 Saved data file: ${dataFile}`);
+        
+        // Automatically start speaker identification after successful extraction
+        this.log(`🎭 Automatically starting speaker identification for chapter ${chapterId}...`);
+        try {
+          await this.processChapterSpeakerIdentification(chapterId);
+          this.log(`✅ Speaker identification completed for chapter ${chapterId}`);
+        } catch (speakerError) {
+          this.log(`⚠️ Speaker identification failed for chapter ${chapterId}: ${speakerError.message}`, 'warning');
+          // Don't throw - we still successfully scraped the content
+        }
         
         return chapterData;
       } else {
@@ -1428,6 +1498,15 @@ class APIServer {
           this.log(`✅ Successfully scraped content for: ${chapterData.title}`);
           this.log(`📝 Content length: ${chapterData.content?.length || 0} characters`);
           
+          // Automatically start speaker identification
+          this.log(`🎭 Automatically starting speaker identification for found chapter...`);
+          try {
+            await this.processChapterSpeakerIdentification(chapterData.id);
+            this.log(`✅ Speaker identification completed for: ${chapterData.title}`);
+          } catch (error) {
+            this.log(`⚠️ Speaker identification failed: ${error.message}`, 'warning');
+          }
+          
           // Save raw data file
           const dataFile = path.join(config.paths.data, `${chapterData.id}.json`);
           await fs.writeFile(dataFile, JSON.stringify(chapterData, null, 2));
@@ -1449,8 +1528,24 @@ class APIServer {
   }
 
   async processChapterSpeakerIdentification(chapterId) {
+    const updateProgress = (updates) => {
+      if (this.speakerIdProgress && this.speakerIdProgress[chapterId]) {
+        this.speakerIdProgress[chapterId] = {
+          ...this.speakerIdProgress[chapterId],
+          ...updates
+        };
+      }
+    };
+    
     try {
       this.log(`🎭 Processing speaker identification for chapter ${chapterId}`);
+      
+      // Update progress - loading chapter
+      updateProgress({
+        status: 'processing',
+        phase: 'loading',
+        message: 'Loading chapter content...'
+      });
       
       // Load chapter content
       const dataFile = path.join(config.paths.data, `${chapterId}.json`);
@@ -1460,10 +1555,24 @@ class APIServer {
       if (!chapterData.content) {
         throw new Error('No content found for chapter');
       }
+      
+      // Update progress - loading speakers
+      updateProgress({
+        phase: 'loading_speakers',
+        message: 'Loading existing speakers...',
+        contentLength: chapterData.content.length
+      });
 
       // Get existing speakers to pass as context
       const knownSpeakers = await this.db.getAllSpeakers();
       this.log(`Found ${knownSpeakers.length} existing speakers`);
+      
+      // Update progress - analyzing
+      updateProgress({
+        phase: 'analyzing',
+        message: `Analyzing ${chapterData.content.length.toLocaleString()} characters with GPT-4...`,
+        knownSpeakers: knownSpeakers.length
+      });
       
       // Set up speaker identifier with server logging
       this.speakerIdentifier.server = this;
@@ -1485,8 +1594,26 @@ class APIServer {
         this.log(`   - ${speaker}: ${count} segments`);
       });
       
+      // Update progress - saving
+      updateProgress({
+        phase: 'saving',
+        message: `Saving ${segments.length} segments to database...`,
+        segments: segments.length,
+        speakerCounts: speakerCounts
+      });
+      
       // Save segments to database
       await this.db.saveChapterSegments(chapterId, segments);
+      
+      // Update progress - complete
+      updateProgress({
+        status: 'completed',
+        phase: 'complete',
+        message: `Successfully identified ${segments.length} segments`,
+        completed: true,
+        segments: segments.length,
+        speakerCounts: speakerCounts
+      });
       
       this.log(`✅ Speaker identification complete for chapter ${chapterId}`);
       
@@ -1494,6 +1621,16 @@ class APIServer {
       
     } catch (error) {
       this.log(`❌ Speaker identification failed for chapter ${chapterId}: ${error.message}`, 'error');
+      
+      // Update progress - error
+      updateProgress({
+        status: 'failed',
+        phase: 'error',
+        message: `Failed: ${error.message}`,
+        completed: false,
+        error: error.message
+      });
+      
       throw error;
     }
   }
