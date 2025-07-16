@@ -26,6 +26,9 @@
   let debugMerging = false;
   let mergeDebugOutput = '';
   let voicesPollInterval = null;
+  let identifyingSpeakers = false;
+  let speakerIdProgress = null;
+  let speakerIdPollInterval = null;
   
   $: if (mode === 'edit') loadChapterText();
   $: if (mode === 'speakers') loadSpeakers();
@@ -45,6 +48,7 @@
   // Stop polling when component destroys
   onDestroy(() => {
     stopVoicesPolling();
+    stopSpeakerIdPolling();
   });
   
   // Restart polling when mode changes
@@ -456,8 +460,14 @@
   }
 
   async function identifySpeakers() {
-    loading = true;
+    identifyingSpeakers = true;
     error = null;
+    speakerIdProgress = {
+      status: 'starting',
+      phase: 'loading',
+      message: 'Starting speaker identification...'
+    };
+    
     try {
       const response = await fetch(`${API_URL}/api/chapters/${chapter.id}/identify-speakers`, {
         method: 'POST'
@@ -465,13 +475,58 @@
       
       if (!response.ok) throw new Error('Failed to identify speakers');
       
-      // Reload the speakers data
-      await loadSpeakers();
+      // Start polling for progress
+      startSpeakerIdPolling();
       
     } catch (err) {
       error = err.message;
-    } finally {
-      loading = false;
+      identifyingSpeakers = false;
+      speakerIdProgress = null;
+    }
+  }
+  
+  async function pollSpeakerIdProgress() {
+    try {
+      const response = await fetch(`${API_URL}/api/chapters/${chapter.id}/speaker-id-progress`);
+      
+      if (response.ok) {
+        const progress = await response.json();
+        speakerIdProgress = progress;
+        
+        // Check if completed or failed
+        if (progress.completed || progress.status === 'failed') {
+          stopSpeakerIdPolling();
+          
+          if (progress.completed) {
+            // Reload the speakers data
+            await loadSpeakers();
+            identifyingSpeakers = false;
+            speakerIdProgress = null;
+          } else if (progress.status === 'failed') {
+            error = progress.error || 'Speaker identification failed';
+            identifyingSpeakers = false;
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Failed to poll speaker ID progress:', err);
+    }
+  }
+  
+  function startSpeakerIdPolling() {
+    if (speakerIdPollInterval) return;
+    
+    // Poll immediately
+    pollSpeakerIdProgress();
+    
+    // Then poll every second
+    speakerIdPollInterval = setInterval(pollSpeakerIdProgress, 1000);
+  }
+  
+  function stopSpeakerIdPolling() {
+    if (speakerIdPollInterval) {
+      clearInterval(speakerIdPollInterval);
+      speakerIdPollInterval = null;
     }
   }
 
@@ -1571,6 +1626,172 @@
     border-radius: 4px;
     border: 1px solid #e0e0e0;
   }
+  
+  /* Speaker ID Progress styles */
+  .speaker-id-progress {
+    padding: 2rem;
+    max-width: 600px;
+    margin: 0 auto;
+  }
+  
+  .speaker-id-progress h3 {
+    text-align: center;
+    margin-bottom: 2rem;
+    color: #333;
+  }
+  
+  .progress-phase {
+    display: flex;
+    justify-content: center;
+    margin-bottom: 1.5rem;
+  }
+  
+  .phase-indicator {
+    background: #f0f0f0;
+    padding: 0.75rem 1.5rem;
+    border-radius: 24px;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    transition: all 0.3s ease;
+  }
+  
+  .phase-indicator.loading {
+    background: #e3f2fd;
+    color: #1976D2;
+  }
+  
+  .phase-indicator.loading_speakers {
+    background: #f3e5f5;
+    color: #7b1fa2;
+  }
+  
+  .phase-indicator.analyzing {
+    background: #fff3e0;
+    color: #f57c00;
+  }
+  
+  .phase-indicator.saving {
+    background: #e8f5e9;
+    color: #388e3c;
+  }
+  
+  .phase-indicator.complete {
+    background: #4CAF50;
+    color: white;
+  }
+  
+  .phase-indicator.error {
+    background: #f44336;
+    color: white;
+  }
+  
+  .progress-message {
+    text-align: center;
+    color: #666;
+    margin-bottom: 2rem;
+    font-size: 1rem;
+    line-height: 1.5;
+  }
+  
+  .progress-stats {
+    background: #f9f9f9;
+    padding: 1rem;
+    border-radius: 8px;
+    margin-bottom: 1.5rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2rem;
+    justify-content: center;
+  }
+  
+  .progress-stats .stat-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.25rem;
+  }
+  
+  .progress-stats .stat-label {
+    font-size: 0.875rem;
+    color: #666;
+  }
+  
+  .progress-stats .stat-value {
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: #333;
+  }
+  
+  .progress-results {
+    margin-top: 2rem;
+    padding: 1.5rem;
+    background: #f0f7ff;
+    border-radius: 8px;
+    border: 1px solid #c3e0ff;
+  }
+  
+  .progress-results h4 {
+    margin: 0 0 1rem 0;
+    color: #1976D2;
+  }
+  
+  .speaker-breakdown {
+    margin-top: 1.5rem;
+  }
+  
+  .speaker-breakdown h5 {
+    margin: 0 0 0.75rem 0;
+    color: #666;
+    font-size: 0.875rem;
+    text-transform: uppercase;
+  }
+  
+  .speaker-counts {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  
+  .speaker-count-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.5rem 1rem;
+    background: white;
+    border-radius: 4px;
+  }
+  
+  .speaker-count-item .speaker-name {
+    font-weight: 500;
+    color: #333;
+  }
+  
+  .speaker-count-item .speaker-count {
+    color: #666;
+    font-size: 0.875rem;
+  }
+  
+  .progress-loader {
+    display: flex;
+    justify-content: center;
+    margin-top: 2rem;
+  }
+  
+  .loader-spinner {
+    width: 40px;
+    height: 40px;
+    border: 4px solid #f3f3f3;
+    border-top: 4px solid #2196F3;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+  }
+  
+  @keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+  }
 </style>
 
 <svelte:window on:keydown={handleKeydown} />
@@ -1635,10 +1856,85 @@
             <div class="loading-state">
               <p>Loading speaker data...</p>
             </div>
+          {:else if identifyingSpeakers && speakerIdProgress}
+            <div class="speaker-id-progress">
+              <h3>🎭 Speaker Identification Progress</h3>
+              
+              <div class="progress-phase">
+                <div class="phase-indicator {speakerIdProgress.phase}">
+                  {#if speakerIdProgress.phase === 'loading'}
+                    📂 Loading Chapter
+                  {:else if speakerIdProgress.phase === 'loading_speakers'}
+                    👥 Loading Speakers
+                  {:else if speakerIdProgress.phase === 'analyzing'}
+                    🧠 Analyzing with GPT-4
+                  {:else if speakerIdProgress.phase === 'saving'}
+                    💾 Saving Results
+                  {:else if speakerIdProgress.phase === 'complete'}
+                    ✅ Complete
+                  {:else if speakerIdProgress.phase === 'error'}
+                    ❌ Error
+                  {/if}
+                </div>
+              </div>
+              
+              <div class="progress-message">
+                {speakerIdProgress.message || 'Processing...'}
+              </div>
+              
+              {#if speakerIdProgress.contentLength}
+                <div class="progress-stats">
+                  <div class="stat-item">
+                    <span class="stat-label">Content Size:</span>
+                    <span class="stat-value">{speakerIdProgress.contentLength.toLocaleString()} characters</span>
+                  </div>
+                  {#if speakerIdProgress.knownSpeakers !== undefined}
+                    <div class="stat-item">
+                      <span class="stat-label">Known Speakers:</span>
+                      <span class="stat-value">{speakerIdProgress.knownSpeakers}</span>
+                    </div>
+                  {/if}
+                </div>
+              {/if}
+              
+              {#if speakerIdProgress.segments}
+                <div class="progress-results">
+                  <h4>Results:</h4>
+                  <div class="results-stats">
+                    <div class="stat-item">
+                      <span class="stat-label">Total Segments:</span>
+                      <span class="stat-value">{speakerIdProgress.segments}</span>
+                    </div>
+                  </div>
+                  
+                  {#if speakerIdProgress.speakerCounts}
+                    <div class="speaker-breakdown">
+                      <h5>Speaker Breakdown:</h5>
+                      <div class="speaker-counts">
+                        {#each Object.entries(speakerIdProgress.speakerCounts) as [speaker, count]}
+                          <div class="speaker-count-item">
+                            <span class="speaker-name">{speaker}:</span>
+                            <span class="speaker-count">{count} segments</span>
+                          </div>
+                        {/each}
+                      </div>
+                    </div>
+                  {/if}
+                </div>
+              {/if}
+              
+              <div class="progress-loader">
+                <div class="loader-spinner"></div>
+              </div>
+            </div>
           {:else if speakers.length === 0}
             <div class="tts-status tts-pending">
               <p>Speaker identification has not been run yet.</p>
-              <button class="primary-button" on:click={identifySpeakers}>
+              <button 
+                class="primary-button" 
+                on:click={identifySpeakers}
+                disabled={identifyingSpeakers}
+              >
                 🎭 Identify Speakers
               </button>
             </div>
