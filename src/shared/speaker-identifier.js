@@ -144,28 +144,34 @@ Return JSON with this exact structure:
   "segments": [
     {
       "speaker": "narrator",
-      "text": "exact text segment",
+      "text": "exact text segment including all whitespace and newlines",
       "type": "narration"
     },
     {
       "speaker": "Jake",
-      "text": "exact dialogue text",
+      "text": "\"Hey,\" Jake said. \"How are you?\"",
       "type": "dialogue"
     }
   ]
 }
 
 CRITICAL RULES:
-1. Every single word from the input must appear in exactly one segment
-2. Preserve exact text, punctuation, and order
-3. Use "narrator" for all non-dialogue text (descriptions, actions, thoughts)
-4. Only use character names when you're certain they are speaking dialogue
-5. For new characters not in the known list, use their name if clearly identified
-6. Split at natural breaks between speakers
-7. Types: "narration" (default), "dialogue", "thought"
-8. IMPORTANT: Use the main character name (not aliases) for consistency
+1. PRESERVE EVERY CHARACTER: Every single character, word, space, newline, and punctuation mark from the input must appear in exactly one segment
+2. NEVER drop attribution phrases like "he said", "she replied" - include the ENTIRE sentence/paragraph with the dialogue
+3. Include quotation marks with dialogue - don't separate them
+4. When dialogue appears mid-sentence (like: "Hello," she said, "how are you?"), keep the ENTIRE sentence together
+5. Use "narrator" for all non-dialogue text (descriptions, actions, thoughts)
+6. Only use character names as speaker when they have dialogue in that segment
+7. For character aliases (Villy = Vilastromoz), always use the main name
+8. Types: "narration" (default), "dialogue", "thought"
+9. Preserve ALL whitespace including newlines and indentation
 
-Be conservative - when in doubt, attribute to "narrator".`;
+DIALOGUE ATTRIBUTION EXAMPLES:
+- "Hello," Jake said. → speaker: "Jake", text includes the whole sentence
+- Jake looked around. "Hello," he said. → speaker: "Jake", text includes both sentences
+- "Hello," said Jake, walking in. → speaker: "Jake", text includes the whole sentence
+
+Be conservative - when in doubt, use larger segments rather than risk dropping text.`;
 
     try {
       const response = await this.openai.chat.completions.create({
