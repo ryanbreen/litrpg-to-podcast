@@ -191,7 +191,7 @@
       const segments = segmentsData.segments || [];
       
       // If no segments found and chapter has content, automatically start speaker identification
-      if (segments.length === 0 && chapter.scraped_at && !identifyingSpeakers) {
+      if (segments.length === 0 && chapter.scrapedAt && !identifyingSpeakers) {
         // Auto-start speaker identification
         console.log('No speaker segments found, auto-starting speaker identification...');
         loading = false; // Reset loading state before starting speaker ID
@@ -2112,7 +2112,7 @@
               {/if}
             </div>
           {:else if speakers.length === 0}
-            {#if !chapter.scraped_at}
+            {#if !chapter.scrapedAt}
               <div class="tts-status tts-pending">
                 <p>No chapter content available. Please scrape the chapter content first.</p>
               </div>
