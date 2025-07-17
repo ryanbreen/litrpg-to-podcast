@@ -494,7 +494,17 @@ class APIServer {
           };
         }
         
-        return this.speakerIdProgress[chapterId];
+        const progress = this.speakerIdProgress[chapterId];
+        
+        // Create a copy to return
+        const result = { ...progress };
+        
+        // Clear the newSegment after sending it once
+        if (progress.newSegment) {
+          delete this.speakerIdProgress[chapterId].newSegment;
+        }
+        
+        return result;
       } catch (error) {
         reply.code(500);
         return { error: error.message };
@@ -1577,9 +1587,20 @@ class APIServer {
       // Set up speaker identifier with server logging
       this.speakerIdentifier.server = this;
       
-      // Identify speakers in the chapter
+      // Identify speakers in the chapter with progress callback
       this.log(`📝 Analyzing chapter content (${chapterData.content.length} characters)...`);
-      const segments = await this.speakerIdentifier.identifySpeakers(chapterData.content, knownSpeakers);
+      const segments = await this.speakerIdentifier.identifySpeakers(
+        chapterData.content, 
+        knownSpeakers,
+        (progress) => {
+          // Update progress with additional streaming info
+          updateProgress({
+            ...progress,
+            contentLength: chapterData.content.length,
+            knownSpeakers: knownSpeakers.length
+          });
+        }
+      );
       
       this.log(`🎯 Identified ${segments.length} segments`);
       
