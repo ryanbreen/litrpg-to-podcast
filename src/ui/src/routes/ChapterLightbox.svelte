@@ -190,6 +190,15 @@
       // Extract segments array from response
       const segments = segmentsData.segments || [];
       
+      // If no segments found and chapter has content, automatically start speaker identification
+      if (segments.length === 0 && chapter.scraped_at && !identifyingSpeakers) {
+        // Auto-start speaker identification
+        console.log('No speaker segments found, auto-starting speaker identification...');
+        loading = false; // Reset loading state before starting speaker ID
+        await identifySpeakers();
+        return; // identifySpeakers will handle the rest
+      }
+      
       // Group segments by speaker
       const speakerMap = {};
       segments.forEach(segmentData => {
@@ -2103,16 +2112,15 @@
               {/if}
             </div>
           {:else if speakers.length === 0}
-            <div class="tts-status tts-pending">
-              <p>Speaker identification has not been run yet.</p>
-              <button 
-                class="primary-button" 
-                on:click={identifySpeakers}
-                disabled={identifyingSpeakers}
-              >
-                🎭 Identify Speakers
-              </button>
-            </div>
+            {#if !chapter.scraped_at}
+              <div class="tts-status tts-pending">
+                <p>No chapter content available. Please scrape the chapter content first.</p>
+              </div>
+            {:else}
+              <div class="tts-status tts-pending">
+                <p>Preparing to identify speakers...</p>
+              </div>
+            {/if}
           {:else}
             <div class="speakers-header-actions">
               <button class="primary-button" on:click={markSpeakerIdComplete}>
