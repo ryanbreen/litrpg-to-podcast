@@ -29,6 +29,7 @@
   let identifyingSpeakers = false;
   let speakerIdProgress = null;
   let speakerIdPollInterval = null;
+  let streamingSegments = []; // Segments that are streaming in real-time
   
   $: if (mode === 'edit') loadChapterText();
   $: if (mode === 'speakers') loadSpeakers();
@@ -462,6 +463,7 @@
   async function identifySpeakers() {
     identifyingSpeakers = true;
     error = null;
+    streamingSegments = []; // Reset streaming segments
     speakerIdProgress = {
       status: 'starting',
       phase: 'loading',
@@ -482,6 +484,7 @@
       error = err.message;
       identifyingSpeakers = false;
       speakerIdProgress = null;
+      streamingSegments = [];
     }
   }
   
@@ -493,6 +496,21 @@
         const progress = await response.json();
         speakerIdProgress = progress;
         
+        // Check for new streaming segments
+        if (progress.newSegment) {
+          streamingSegments = [...streamingSegments, progress.newSegment];
+          // Update segments with scrolling to show new ones
+          streamingSegments = streamingSegments;
+          
+          // Auto-scroll to show new segments
+          setTimeout(() => {
+            const segmentsList = document.querySelector('.streaming-segments');
+            if (segmentsList) {
+              segmentsList.scrollTop = segmentsList.scrollHeight;
+            }
+          }, 100);
+        }
+        
         // Check if completed or failed
         if (progress.completed || progress.status === 'failed') {
           stopSpeakerIdPolling();
@@ -502,9 +520,11 @@
             await loadSpeakers();
             identifyingSpeakers = false;
             speakerIdProgress = null;
+            streamingSegments = [];
           } else if (progress.status === 'failed') {
             error = progress.error || 'Speaker identification failed';
             identifyingSpeakers = false;
+            streamingSegments = [];
           }
         }
       }
@@ -1630,8 +1650,12 @@
   /* Speaker ID Progress styles */
   .speaker-id-progress {
     padding: 2rem;
-    max-width: 600px;
+    width: 90%;
     margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0; /* Allow flex item to shrink */
   }
   
   .speaker-id-progress h3 {
@@ -1792,6 +1816,121 @@
     0% { transform: rotate(0deg); }
     100% { transform: rotate(360deg); }
   }
+  
+  /* Chunk progress styles */
+  .chunk-progress {
+    margin: 1.5rem 0;
+    padding: 1rem;
+    background: #f5f5f5;
+    border-radius: 8px;
+  }
+  
+  .progress-bar {
+    width: 100%;
+    height: 8px;
+    background: #e0e0e0;
+    border-radius: 4px;
+    overflow: hidden;
+    margin-bottom: 0.5rem;
+  }
+  
+  .progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #4CAF50, #45a049);
+    transition: width 0.3s ease;
+  }
+  
+  .progress-text {
+    text-align: center;
+    font-size: 0.875rem;
+    color: #666;
+    font-weight: 500;
+  }
+  
+  /* Streaming segments styles */
+  .streaming-segments {
+    margin-top: 2rem;
+    padding: 1.5rem;
+    background: #f8f9fa;
+    border-radius: 8px;
+    border: 1px solid #e9ecef;
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    min-height: 0; /* Allow flex item to shrink */
+  }
+  
+  .streaming-segments h4 {
+    margin: 0 0 1rem 0;
+    color: #333;
+    font-size: 1rem;
+  }
+  
+  .segments-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    flex: 1;
+    overflow-y: auto;
+  }
+  
+  .streaming-segment {
+    background: white;
+    border: 1px solid #e0e0e0;
+    border-radius: 6px;
+    padding: 0.75rem;
+    opacity: 0;
+    transform: translateY(10px);
+    transition: all 0.3s ease;
+  }
+  
+  .streaming-segment.fade-in {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  
+  .segment-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.5rem;
+  }
+  
+  .segment-speaker {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  
+  .speaker-name {
+    font-weight: 600;
+    color: #333;
+  }
+  
+  .segment-type {
+    font-size: 0.75rem;
+    color: #666;
+    background: #f0f0f0;
+    padding: 0.125rem 0.375rem;
+    border-radius: 12px;
+    text-transform: uppercase;
+  }
+  
+  .segment-number {
+    font-size: 0.75rem;
+    color: #999;
+    background: #f8f9fa;
+    padding: 0.125rem 0.375rem;
+    border-radius: 12px;
+  }
+  
+  .segment-text {
+    font-size: 0.875rem;
+    color: #555;
+    line-height: 1.4;
+    word-wrap: break-word;
+  }
 </style>
 
 <svelte:window on:keydown={handleKeydown} />
@@ -1882,6 +2021,20 @@
                 {speakerIdProgress.message || 'Processing...'}
               </div>
               
+              {#if speakerIdProgress.totalChunks > 1}
+                <div class="chunk-progress">
+                  <div class="progress-bar">
+                    <div class="progress-fill" style="width: {((speakerIdProgress.currentChunk + 1) / speakerIdProgress.totalChunks) * 100}%"></div>
+                  </div>
+                  <div class="progress-text">
+                    Chunk {speakerIdProgress.currentChunk + 1} of {speakerIdProgress.totalChunks}
+                    {#if speakerIdProgress.chunkSegments}
+                      - {speakerIdProgress.chunkSegments} segments processed
+                    {/if}
+                  </div>
+                </div>
+              {/if}
+              
               {#if speakerIdProgress.contentLength}
                 <div class="progress-stats">
                   <div class="stat-item">
@@ -1926,6 +2079,28 @@
               <div class="progress-loader">
                 <div class="loader-spinner"></div>
               </div>
+              
+              {#if streamingSegments.length > 0}
+                <div class="streaming-segments">
+                  <h4>📝 Segments Identified:</h4>
+                  <div class="segments-list">
+                    {#each streamingSegments as segment, index}
+                      <div class="streaming-segment" class:fade-in={true}>
+                        <div class="segment-header">
+                          <div class="segment-speaker">
+                            <span class="speaker-name">{segment.speaker}</span>
+                            <span class="segment-type">{segment.type}</span>
+                          </div>
+                          <div class="segment-number">#{index + 1}</div>
+                        </div>
+                        <div class="segment-text">
+                          {segment.text.length > 150 ? segment.text.substring(0, 150) + '...' : segment.text}
+                        </div>
+                      </div>
+                    {/each}
+                  </div>
+                </div>
+              {/if}
             </div>
           {:else if speakers.length === 0}
             <div class="tts-status tts-pending">
