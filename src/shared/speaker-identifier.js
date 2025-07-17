@@ -122,11 +122,59 @@ class SpeakerIdentifier {
     
     return context;
   }
+  
+  // Split text into chunks for incremental processing
+  chunkText(text, maxChunkSize = 8000) {
+    const chunks = [];
+    const paragraphs = text.split('\n\n');
+    
+    let currentChunk = '';
+    let currentChunkSize = 0;
+    
+    for (const paragraph of paragraphs) {
+      const paragraphSize = paragraph.length + 2; // +2 for the \n\n
+      
+      // If adding this paragraph would exceed chunk size and we have content
+      if (currentChunkSize + paragraphSize > maxChunkSize && currentChunk.trim()) {
+        chunks.push(currentChunk.trim());
+        currentChunk = paragraph;
+        currentChunkSize = paragraphSize;
+      } else {
+        if (currentChunk) {
+          currentChunk += '\n\n' + paragraph;
+          currentChunkSize += paragraphSize;
+        } else {
+          currentChunk = paragraph;
+          currentChunkSize = paragraphSize;
+        }
+      }
+    }
+    
+    // Add the last chunk if it has content
+    if (currentChunk.trim()) {
+      chunks.push(currentChunk.trim());
+    }
+    
+    return chunks;
+  }
 
-  async identifySpeakers(chapterText, knownSpeakers = []) {
+  async identifySpeakers(chapterText, knownSpeakers = [], progressCallback = null) {
     // Preprocess the text before sending to OpenAI
     const preprocessedText = this.preprocessText(chapterText);
     this.log(`📝 Preprocessing applied pronunciation dictionary and pause markers`);
+    
+    // Split into chunks for incremental processing
+    const chunks = this.chunkText(preprocessedText);
+    this.log(`📦 Split text into ${chunks.length} chunks for processing`);
+    
+    if (progressCallback) {
+      progressCallback({
+        phase: 'analyzing',
+        message: `Processing ${chunks.length} chunks with GPT-4...`,
+        currentChunk: 0,
+        totalChunks: chunks.length
+      });
+    }
     
     const knownCharacters = knownSpeakers
       .filter(s => !s.is_narrator)
@@ -174,49 +222,149 @@ DIALOGUE ATTRIBUTION EXAMPLES:
 Be conservative - when in doubt, use larger segments rather than risk dropping text.`;
 
     try {
-      const response = await this.openai.chat.completions.create({
-        model: "gpt-4o",
-        response_format: { type: "json_object" },
-        messages: [
-          {
-            role: "system",
-            content: systemPrompt
-          },
-          {
-            role: "user",
-            content: preprocessedText
-          }
-        ],
-        temperature: 0.1 // Lower temperature for more consistent results
-      });
-
-      const result = JSON.parse(response.choices[0].message.content);
+      const allSegments = [];
       
-      // Validate the response
-      if (!result.segments || !Array.isArray(result.segments)) {
-        throw new Error('Invalid response format: missing segments array');
-      }
-
-      // Validate each segment and check for AI Announcer
-      for (let i = 0; i < result.segments.length; i++) {
-        const segment = result.segments[i];
-        if (!segment.speaker || !segment.text) {
-          throw new Error(`Invalid segment ${i}: missing speaker or text`);
-        }
-        if (!segment.type) {
-          segment.type = 'narration'; // Default type
+      // Process each chunk incrementally
+      for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
+        const chunk = chunks[chunkIndex];
+        
+        if (progressCallback) {
+          progressCallback({
+            phase: 'analyzing',
+            message: `Processing chunk ${chunkIndex + 1} of ${chunks.length}...`,
+            currentChunk: chunkIndex,
+            totalChunks: chunks.length
+          });
         }
         
-        // Check if this should be AI Announcer
-        if (segment.speaker === 'narrator' && this.isAIAnnouncer(segment.text)) {
-          segment.speaker = 'ai_announcer';
-          segment.type = 'announcement';
-          this.log(`🤖 Identified AI Announcer segment: "${segment.text.substring(0, 50)}..."`);
+        this.log(`🔄 Processing chunk ${chunkIndex + 1}/${chunks.length} (${chunk.length} chars)`);
+        
+        const response = await this.openai.chat.completions.create({
+          model: "gpt-4o",
+          response_format: { type: "json_object" },
+          messages: [
+            {
+              role: "system",
+              content: systemPrompt
+            },
+            {
+              role: "user",
+              content: chunk
+            }
+          ],
+          temperature: 0.1, // Lower temperature for more consistent results
+          stream: true // Enable streaming for real-time progress
+        });
+
+        // Handle streaming response
+        let streamedContent = '';
+        let segmentCount = 0;
+        let lastParsedSegments = [];
+        
+        for await (const chunk of response) {
+          const delta = chunk.choices[0]?.delta?.content || '';
+          streamedContent += delta;
+          
+          // Try to parse complete segments as they appear in the stream
+          try {
+            // Look for complete segments in the streamed content
+            const segmentMatches = streamedContent.match(/"speaker":\s*"[^"]*",\s*"text":\s*"[^"]*",\s*"type":\s*"[^"]*"/g);
+            
+            if (segmentMatches && segmentMatches.length > lastParsedSegments.length) {
+              // New segments found - try to parse them
+              const newSegmentCount = segmentMatches.length;
+              
+              // Try to extract just the new segments
+              for (let i = lastParsedSegments.length; i < newSegmentCount; i++) {
+                try {
+                  // Build a partial JSON to parse individual segments
+                  const segmentMatch = segmentMatches[i];
+                  const segmentJson = `{${segmentMatch}}`;
+                  const parsedSegment = JSON.parse(segmentJson);
+                  
+                  // Check if this should be AI Announcer
+                  if (parsedSegment.speaker === 'narrator' && this.isAIAnnouncer(parsedSegment.text)) {
+                    parsedSegment.speaker = 'ai_announcer';
+                    parsedSegment.type = 'announcement';
+                  }
+                  
+                  lastParsedSegments.push(parsedSegment);
+                  
+                  // Stream this segment back immediately
+                  if (progressCallback) {
+                    progressCallback({
+                      phase: 'streaming',
+                      message: `Chunk ${chunkIndex + 1}/${chunks.length}: Streaming segment ${i + 1}...`,
+                      currentChunk: chunkIndex,
+                      totalChunks: chunks.length,
+                      chunkSegments: i + 1,
+                      newSegment: parsedSegment
+                    });
+                  }
+                  
+                } catch (parseError) {
+                  // Skip if segment isn't complete yet
+                }
+              }
+            }
+          } catch (parseError) {
+            // Continue streaming - JSON might not be complete yet
+          }
+          
+          // Update general progress
+          const segmentMatches = streamedContent.match(/"speaker":/g);
+          const currentSegmentCount = segmentMatches ? segmentMatches.length : 0;
+          
+          if (currentSegmentCount > segmentCount) {
+            segmentCount = currentSegmentCount;
+            if (progressCallback && lastParsedSegments.length === 0) {
+              progressCallback({
+                phase: 'analyzing',
+                message: `Chunk ${chunkIndex + 1}/${chunks.length}: Processing segment ${segmentCount}...`,
+                currentChunk: chunkIndex,
+                totalChunks: chunks.length,
+                chunkSegments: segmentCount
+              });
+            }
+          }
+        }
+        
+        const result = JSON.parse(streamedContent);
+        
+        // Validate the response
+        if (!result.segments || !Array.isArray(result.segments)) {
+          throw new Error(`Invalid response format for chunk ${chunkIndex}: missing segments array`);
+        }
+
+        // Validate each segment and check for AI Announcer
+        for (let i = 0; i < result.segments.length; i++) {
+          const segment = result.segments[i];
+          if (!segment.speaker || !segment.text) {
+            throw new Error(`Invalid segment ${i} in chunk ${chunkIndex}: missing speaker or text`);
+          }
+          if (!segment.type) {
+            segment.type = 'narration'; // Default type
+          }
+          
+          // Check if this should be AI Announcer
+          if (segment.speaker === 'narrator' && this.isAIAnnouncer(segment.text)) {
+            segment.speaker = 'ai_announcer';
+            segment.type = 'announcement';
+            this.log(`🤖 Identified AI Announcer segment: "${segment.text.substring(0, 50)}..."`);
+          }
+        }
+
+        // Add chunks segments to the overall collection
+        allSegments.push(...result.segments);
+        
+        // Brief pause between chunks to avoid rate limiting
+        if (chunkIndex < chunks.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 100));
         }
       }
 
       // Verify all text is accounted for (compare with preprocessed text)
-      const reconstructedText = result.segments.map(s => s.text).join('');
+      const reconstructedText = allSegments.map(s => s.text).join('');
       const preprocessedNormalized = preprocessedText.replace(/\s+/g, ' ').trim();
       const reconstructedTextNormalized = reconstructedText.replace(/\s+/g, ' ').trim();
       
@@ -226,7 +374,7 @@ Be conservative - when in doubt, use larger segments rather than risk dropping t
         console.log('Reconstructed length:', reconstructedTextNormalized.length);
       }
 
-      return result.segments;
+      return allSegments;
 
     } catch (error) {
       console.error('OpenAI speaker identification failed:', error);
