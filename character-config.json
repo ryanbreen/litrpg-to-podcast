@@ -1,12 +1,17 @@
 {
   "characterAliases": {
     "Vilastromoz": {
-      "aliases": ["Villy", "the Malefic Viper", "Vilas", "Malefic Viper"],
+      "aliases": [
+        "Villy",
+        "the Malefic Viper",
+        "Vilas",
+        "Malefic Viper"
+      ],
       "description": "Ancient Primordial, appears as both snake and humanoid form"
     }
   },
   "pronunciations": {
     "lvl": "level",
-    "malefic": "muh-lef-ik"
+    "malefic": "mə-lef-ik"
   }
 }

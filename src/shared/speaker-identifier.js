@@ -106,6 +106,12 @@ class SpeakerIdentifier {
     return false;
   }
   
+  // Check if text is just "DING!" (for sound effect)
+  isDingSound(text) {
+    const trimmed = text.trim();
+    return trimmed === 'DING!' || trimmed === 'Ding!' || trimmed === 'ding!';
+  }
+  
   // Generate character alias context for GPT
   generateCharacterContext() {
     let context = '';
@@ -213,13 +219,49 @@ CRITICAL RULES:
 7. For character aliases (Villy = Vilastromoz), always use the main name
 8. Types: "narration" (default), "dialogue", "thought"
 9. Preserve ALL whitespace including newlines and indentation
+10. CRITICAL: The character only speaks the words INSIDE quotation marks. Everything outside quotes is narration.
+11. CRITICAL: When a dialogue line ends with closing quotes, the speaker STOPS speaking. Any text after quotes is narrator.
 
 DIALOGUE ATTRIBUTION EXAMPLES:
 - "Hello," Jake said. → speaker: "Jake", text includes the whole sentence
 - Jake looked around. "Hello," he said. → speaker: "Jake", text includes both sentences
 - "Hello," said Jake, walking in. → speaker: "Jake", text includes the whole sentence
+- "Hello," Jake said. He walked away. → TWO segments: 1) speaker: "Jake" with "Hello," Jake said. 2) speaker: "narrator" with He walked away.
+- Jake nodded. "Yes," he said. Then he left. → TWO segments: 1) speaker: "Jake" with Jake nodded. "Yes," he said. 2) speaker: "narrator" with Then he left.
 
-Be conservative - when in doubt, use larger segments rather than risk dropping text.`;
+CRITICAL MULTI-QUOTE EXAMPLES - THESE MUST BE SPLIT:
+1. "It won't!" the mage slammed his hand on the table. "Eleven Primas are coming!" 
+   MUST BE THREE SEGMENTS:
+   - speaker: "mage" → "It won't!"
+   - speaker: "narrator" → the mage slammed his hand on the table.
+   - speaker: "mage" → "Eleven Primas are coming!"
+
+2. "Hello," she said, turning away. "Goodbye."
+   MUST BE THREE SEGMENTS:
+   - speaker: "[character]" → "Hello," she said,
+   - speaker: "narrator" → turning away.
+   - speaker: "[character]" → "Goodbye."
+
+3. "Stop!" Jake yelled. He ran forward. "Wait for me!"
+   MUST BE THREE SEGMENTS:
+   - speaker: "Jake" → "Stop!" Jake yelled.
+   - speaker: "narrator" → He ran forward.
+   - speaker: "Jake" → "Wait for me!"
+
+ABSOLUTE SPLITTING RULES - NO EXCEPTIONS:
+1. A character segment can contain ONLY ONE continuous quote with its attribution
+2. If you see: [quote][non-quote text][quote] = ALWAYS 3+ segments
+3. Split at EVERY transition between quoted and non-quoted text
+4. "Quote 1" [any text] "Quote 2" = MINIMUM 3 segments, even if same speaker
+5. The pattern "!" [action]. " is ALWAYS a segment boundary
+
+ENFORCEMENT:
+- When you encounter text like: "X" Y. "Z"
+- This is NEVER one segment
+- This is ALWAYS: segment 1 (X), segment 2 (Y.), segment 3 (Z)
+- Even if X and Z are the same character speaking
+
+Be conservative - when in doubt, split into more segments rather than risk wrong attribution.`;
 
     try {
       const allSegments = [];
@@ -286,6 +328,12 @@ Be conservative - when in doubt, use larger segments rather than risk dropping t
                   if (parsedSegment.speaker === 'narrator' && this.isAIAnnouncer(parsedSegment.text)) {
                     parsedSegment.speaker = 'ai_announcer';
                     parsedSegment.type = 'announcement';
+                    
+                    // Special case for DING! sound effect
+                    if (this.isDingSound(parsedSegment.text)) {
+                      parsedSegment.type = 'sound_effect';
+                      parsedSegment.sound = 'ding';
+                    }
                   }
                   
                   lastParsedSegments.push(parsedSegment);
@@ -350,7 +398,15 @@ Be conservative - when in doubt, use larger segments rather than risk dropping t
           if (segment.speaker === 'narrator' && this.isAIAnnouncer(segment.text)) {
             segment.speaker = 'ai_announcer';
             segment.type = 'announcement';
-            this.log(`🤖 Identified AI Announcer segment: "${segment.text.substring(0, 50)}..."`);
+            
+            // Special case for DING! sound effect
+            if (this.isDingSound(segment.text)) {
+              segment.type = 'sound_effect';
+              segment.sound = 'ding';
+              this.log(`🔔 Identified DING! sound effect`);
+            } else {
+              this.log(`🤖 Identified AI Announcer segment: "${segment.text.substring(0, 50)}..."`);
+            }
           }
         }
 

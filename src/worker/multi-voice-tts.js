@@ -40,11 +40,19 @@ class MultiVoiceTTSWorker {
     await this.db.init();
   }
 
-  async generateSpeechSegment(text, voice, outputPath) {
+  async generateSpeechSegment(text, voice, outputPath, segmentType = null) {
     // Check if this is a pause marker
     if (text.trim() === '<pause3s>') {
       this.log(`Creating 3-second pause...`);
       await this.createSilence(3000, outputPath);
+      return;
+    }
+    
+    // Check if this is a DING! sound effect
+    if (segmentType === 'sound_effect' && (text.trim() === 'DING!' || text.trim() === 'Ding!' || text.trim() === 'ding!')) {
+      this.log(`🔔 Using ding sound effect...`);
+      const dingFile = path.join('public', 'audio', 'ding.mp3');
+      await fs.copyFile(dingFile, outputPath);
       return;
     }
     
@@ -250,7 +258,7 @@ class MultiVoiceTTSWorker {
     await fs.writeFile(concatFile, fileList);
 
     try {
-      const command = `ffmpeg -f concat -safe 0 -i "${concatFile}" -af "aresample=44100,aformat=sample_fmts=fltp:channel_layouts=mono" -c:a libmp3lame -b:a 128k "${outputPath}" -y`;
+      const command = `ffmpeg -f concat -safe 0 -i "${concatFile}" -af "aresample=44100,aformat=sample_fmts=fltp:channel_layouts=mono,loudnorm=I=-16:TP=-1.5:LRA=11" -c:a libmp3lame -b:a 128k "${outputPath}" -y`;
       await execAsync(command);
     } finally {
       // Clean up concat file
@@ -382,7 +390,7 @@ class MultiVoiceTTSWorker {
           this.log(`Using cached segment: ${path.basename(segmentFile)}`);
         } catch {
           // Generate new segment
-          await this.generateSpeechSegment(segment.text, voice, segmentFile);
+          await this.generateSpeechSegment(segment.text, voice, segmentFile, segment.type);
           this.log(`Generated new segment: ${path.basename(segmentFile)}`);
         }
         
@@ -432,6 +440,21 @@ class MultiVoiceTTSWorker {
         this.log(`Completed segment ${i + 1}/${segments.length}`);
       }
 
+      // Add "End of Chapter" announcement with 2-second pause before it
+      this.log('Adding end of chapter announcement...');
+      
+      // Create 2-second pause before "End of Chapter"
+      const endPauseFile = path.join(segmentsDir, `end_pause.mp3`);
+      await this.createSilence(2000, endPauseFile);
+      audioFiles.push(endPauseFile);
+      
+      // Generate "End of Chapter" audio
+      const endChapterFile = path.join(segmentsDir, `end_chapter.mp3`);
+      const narratorVoice = speakerVoices.get(segments.find(s => s.speaker_id === 'narrator')?.speaker_id) || 
+                          { id: 'nova', name: 'Nova (Narrator)', provider: 'openai', settings: {} };
+      await this.generateSpeechSegment('End of Chapter', narratorVoice, endChapterFile);
+      audioFiles.push(endChapterFile);
+      
       // Concatenate all audio files
       this.log('Concatenating audio segments...');
       await this.concatenateAudio(audioFiles, outputFile);
@@ -552,7 +575,7 @@ class MultiVoiceTTSWorker {
     }
     
     // Generate new segment
-    await this.generateSpeechSegment(segment.text, voice, segmentFile);
+    await this.generateSpeechSegment(segment.text, voice, segmentFile, segment.type);
     
     this.log(`✅ Regenerated segment ${segmentIndex}: ${path.basename(segmentFile)}`);
     return segmentFile;
@@ -613,6 +636,32 @@ class MultiVoiceTTSWorker {
         }
       }
     }
+    
+    // Add "End of Chapter" announcement with 2-second pause before it
+    this.log('Adding end of chapter announcement...');
+    
+    // Create 2-second pause before "End of Chapter"
+    const endPauseFile = path.join(segmentsDir, `end_pause.mp3`);
+    try {
+      await fs.access(endPauseFile);
+    } catch {
+      await this.createSilence(2000, endPauseFile);
+    }
+    audioFiles.push(endPauseFile);
+    
+    // Use existing or generate "End of Chapter" audio
+    const endChapterFile = path.join(segmentsDir, `end_chapter.mp3`);
+    try {
+      await fs.access(endChapterFile);
+    } catch {
+      // Find narrator voice from segments
+      const narratorSegment = segments.find(s => s.speaker_id === 'narrator' || s.speaker_name === 'narrator');
+      const narratorVoiceId = narratorSegment?.voice_id || 'nova';
+      const narratorVoice = await this.db.getVoice(narratorVoiceId) || 
+                          { id: 'nova', name: 'Nova (Narrator)', provider: 'openai', settings: {} };
+      await this.generateSpeechSegment('End of Chapter', narratorVoice, endChapterFile);
+    }
+    audioFiles.push(endChapterFile);
     
     // Concatenate all audio files
     this.log(`Concatenating ${audioFiles.length} audio files...`);
@@ -759,7 +808,7 @@ class MultiVoiceTTSWorker {
     debugOutput += `File list contents:\n${fileListContent}\n\n`;
     
     // Run ffmpeg with verbose output and re-encoding to ensure consistent format
-    const ffmpegCmd = `ffmpeg -f concat -safe 0 -i "${fileListPath}" -af "aresample=44100,aformat=sample_fmts=fltp:channel_layouts=mono" -c:a libmp3lame -b:a 128k -y "${outputFile}" -v verbose`;
+    const ffmpegCmd = `ffmpeg -f concat -safe 0 -i "${fileListPath}" -af "aresample=44100,aformat=sample_fmts=fltp:channel_layouts=mono,loudnorm=I=-16:TP=-1.5:LRA=11" -c:a libmp3lame -b:a 128k -y "${outputFile}" -v verbose`;
     debugOutput += `Command: ${ffmpegCmd}\n\n`;
     debugOutput += `Note: Using re-encoding with audio filtering to normalize channels and sample rate\n\n`;
     
