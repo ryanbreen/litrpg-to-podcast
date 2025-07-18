@@ -245,7 +245,8 @@ class MultiVoiceTTSWorker {
 
   async createSilence(durationMs, outputPath) {
     const durationSec = durationMs / 1000;
-    const command = `ffmpeg -f lavfi -i anullsrc=r=44100:cl=stereo -t ${durationSec} -q:a 9 -acodec libmp3lame "${outputPath}" -y`;
+    // Use mono channel layout to match TTS-generated segments
+    const command = `ffmpeg -f lavfi -i anullsrc=r=44100:cl=mono -t ${durationSec} -q:a 9 -acodec libmp3lame "${outputPath}" -y`;
     
     await execAsync(command);
     return outputPath;
