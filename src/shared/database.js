@@ -342,6 +342,12 @@ class Database {
     for (let i = 0; i < segments.length; i++) {
       const segment = segments[i];
       
+      // Skip undefined segments (shouldn't happen, but just in case)
+      if (!segment) {
+        console.error(`Warning: Undefined segment at index ${i} for chapter ${chapterId}`);
+        continue;
+      }
+      
       // Map "unknown" speakers to "narrator"
       let speakerName = segment.speaker;
       if (speakerName === 'unknown') {

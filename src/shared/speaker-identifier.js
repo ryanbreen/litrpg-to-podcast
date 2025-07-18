@@ -532,7 +532,8 @@ RULES:
 - Preserve the exact text without modification`;
 
     try {
-      const attributedSegments = [];
+      // Pre-allocate array with correct size to maintain order
+      const attributedSegments = new Array(rawSegments.length);
       const batchSize = 20; // Process segments in batches
       
       for (let i = 0; i < rawSegments.length; i += batchSize) {
@@ -552,7 +553,7 @@ RULES:
         
         this.log(`🎭 Processing attribution batch ${batchIndex}/${totalBatches}`);
         
-        // Create a simplified input for GPT
+        // Create a simplified input for GPT with indices
         const batchInput = batch.map((seg, idx) => ({
           index: i + idx,
           type: seg.type,
@@ -577,9 +578,10 @@ RULES:
         
         const result = JSON.parse(response.choices[0].message.content);
         
-        // Process each attributed segment
+        // Process each attributed segment and place in correct position
         for (let j = 0; j < result.segments.length; j++) {
           const segment = result.segments[j];
+          const originalIndex = i + j; // Calculate original position
           
           // Check for AI announcer and sound effects
           if (segment.speaker === 'narrator' && this.isAIAnnouncer(segment.text)) {
@@ -593,7 +595,8 @@ RULES:
             }
           }
           
-          attributedSegments.push(segment);
+          // Place segment in correct position
+          attributedSegments[originalIndex] = segment;
         }
         
         // Brief pause between batches
