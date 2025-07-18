@@ -3,6 +3,39 @@ import fs from 'fs/promises';
 import path from 'path';
 import config from './config.js';
 
+/**
+ * Deterministically splits prose into alternating dialogue / narration segments.
+ * Dialogue is any run of text delimited by straight or curly double-quotes.
+ * The function is whitespace-preserving and makes no speaker judgements.
+ */
+export function splitDialogueNarration(passage) {
+  const segments = [];
+  let start = 0;
+  let inQuote = false;
+  // Check for both straight quotes and curly quotes (open and close)
+  // Straight quote ("), curly open ("), curly close (")
+  const isQuote = c => c === '"' || c === String.fromCharCode(8220) || c === String.fromCharCode(8221);
+
+  for (let i = 0; i < passage.length; i += 1) {
+    if (isQuote(passage[i])) {
+      if (!inQuote && i > start) {
+        segments.push({ type: 'narration', text: passage.slice(start, i) });
+        start = i;
+      }
+      inQuote = !inQuote;
+      if (!inQuote) {
+        // we just closed a quote
+        segments.push({ type: 'dialogue', text: passage.slice(start, i + 1) });
+        start = i + 1;
+      }
+    }
+  }
+  if (start < passage.length) {
+    segments.push({ type: inQuote ? 'dialogue' : 'narration', text: passage.slice(start) });
+  }
+  return segments.filter(s => s.text.trim() !== '');
+}
+
 class SpeakerIdentifier {
   constructor() {
     this.openai = new OpenAI({
@@ -442,6 +475,153 @@ Be conservative - when in doubt, split into more segments rather than risk wrong
         text: fallbackText,
         type: 'narration'
       }];
+    }
+  }
+
+  async identifySpeakersTwoStage(chapterText, knownSpeakers = [], progressCallback = null) {
+    // Step 1: Preprocess the text
+    const preprocessedText = this.preprocessText(chapterText);
+    this.log(`📝 Preprocessing applied pronunciation dictionary and pause markers`);
+    
+    // Step 2: Deterministic segmentation
+    this.log(`✂️ Starting deterministic quote segmentation...`);
+    const rawSegments = splitDialogueNarration(preprocessedText);
+    this.log(`📊 Split into ${rawSegments.length} segments (dialogue/narration)`)
+    
+    if (progressCallback) {
+      progressCallback({
+        phase: 'segmenting',
+        message: `Split text into ${rawSegments.length} segments`,
+        totalSegments: rawSegments.length
+      });
+    }
+    
+    // Step 3: Prepare for attribution
+    const knownCharacters = knownSpeakers
+      .filter(s => !s.is_narrator)
+      .map(s => s.name)
+      .join(', ');
+    
+    const characterContext = this.generateCharacterContext();
+    
+    // Simpler prompt for attribution only
+    const systemPrompt = `You are a dialogue attribution specialist. You will be given pre-segmented text where dialogue and narration are already separated.
+
+Known characters from previous chapters: ${knownCharacters || 'None yet'}${characterContext}
+
+Your task is to:
+1. For dialogue segments: identify the speaking character based on context
+2. For narration segments: confirm they should be attributed to "narrator"
+3. Identify special cases like AI announcements or sound effects
+
+Return JSON with this structure:
+{
+  "segments": [
+    {
+      "speaker": "character_name_or_narrator",
+      "text": "the exact text provided",
+      "type": "dialogue/narration/announcement/thought"
+    }
+  ]
+}
+
+RULES:
+- Use character names exactly as they appear in the known characters list
+- For character aliases (e.g., Villy = Vilastromoz), use the main name
+- If speaker is unclear from context, use "unknown"
+- Preserve the exact text without modification`;
+
+    try {
+      const attributedSegments = [];
+      const batchSize = 20; // Process segments in batches
+      
+      for (let i = 0; i < rawSegments.length; i += batchSize) {
+        const batch = rawSegments.slice(i, Math.min(i + batchSize, rawSegments.length));
+        const batchIndex = Math.floor(i / batchSize) + 1;
+        const totalBatches = Math.ceil(rawSegments.length / batchSize);
+        
+        if (progressCallback) {
+          progressCallback({
+            phase: 'attributing',
+            message: `Attributing speakers for batch ${batchIndex}/${totalBatches}...`,
+            currentBatch: batchIndex,
+            totalBatches: totalBatches,
+            progress: Math.round((i / rawSegments.length) * 100)
+          });
+        }
+        
+        this.log(`🎭 Processing attribution batch ${batchIndex}/${totalBatches}`);
+        
+        // Create a simplified input for GPT
+        const batchInput = batch.map((seg, idx) => ({
+          index: i + idx,
+          type: seg.type,
+          text: seg.text
+        }));
+        
+        const response = await this.openai.chat.completions.create({
+          model: "gpt-4-turbo-2024-04-09",
+          response_format: { type: "json_object" },
+          messages: [
+            {
+              role: "system",
+              content: systemPrompt
+            },
+            {
+              role: "user",
+              content: `Attribute speakers to these pre-segmented texts:\n\n${JSON.stringify(batchInput, null, 2)}`
+            }
+          ],
+          temperature: 0.1
+        });
+        
+        const result = JSON.parse(response.choices[0].message.content);
+        
+        // Process each attributed segment
+        for (let j = 0; j < result.segments.length; j++) {
+          const segment = result.segments[j];
+          
+          // Check for AI announcer and sound effects
+          if (segment.speaker === 'narrator' && this.isAIAnnouncer(segment.text)) {
+            segment.speaker = 'ai_announcer';
+            segment.type = 'announcement';
+            
+            if (this.isDingSound(segment.text)) {
+              segment.type = 'sound_effect';
+              segment.sound = 'ding';
+              this.log(`🔔 Identified DING! sound effect`);
+            }
+          }
+          
+          attributedSegments.push(segment);
+        }
+        
+        // Brief pause between batches
+        if (i + batchSize < rawSegments.length) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+      }
+      
+      if (progressCallback) {
+        progressCallback({
+          phase: 'complete',
+          message: `Successfully identified ${attributedSegments.length} segments`,
+          segments: attributedSegments.length
+        });
+      }
+      
+      this.log(`✅ Two-stage identification complete: ${attributedSegments.length} segments`);
+      return attributedSegments;
+      
+    } catch (error) {
+      console.error('Two-stage speaker identification failed:', error);
+      
+      // Fallback: return segments with default attribution
+      return rawSegments.map(seg => ({
+        speaker: seg.type === 'dialogue' ? 'unknown' : 'narrator',
+        text: seg.text,
+        type: seg.type
+      }));
     }
   }
 

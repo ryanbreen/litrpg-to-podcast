@@ -1589,7 +1589,7 @@ class APIServer {
       
       // Identify speakers in the chapter with progress callback
       this.log(`📝 Analyzing chapter content (${chapterData.content.length} characters)...`);
-      const segments = await this.speakerIdentifier.identifySpeakers(
+      const segments = await this.speakerIdentifier.identifySpeakersTwoStage(
         chapterData.content, 
         knownSpeakers,
         (progress) => {
