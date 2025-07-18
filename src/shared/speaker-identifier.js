@@ -282,7 +282,7 @@ Be conservative - when in doubt, split into more segments rather than risk wrong
         this.log(`🔄 Processing chunk ${chunkIndex + 1}/${chunks.length} (${chunk.length} chars)`);
         
         const response = await this.openai.chat.completions.create({
-          model: "gpt-4o",
+          model: "gpt-4-turbo-2024-04-09",
           response_format: { type: "json_object" },
           messages: [
             {
