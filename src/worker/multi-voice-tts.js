@@ -273,21 +273,33 @@ class MultiVoiceTTSWorker {
     const concatFile = outputPath + '.concat.txt';
     const fileList = inputFiles.map(file => `file '${path.resolve(file)}'`).join('\n');
     await fs.writeFile(concatFile, fileList);
+    
+    // Log the last few files to help debug
+    this.log(`Concatenating ${inputFiles.length} files...`);
+    if (inputFiles.length > 5) {
+      this.log(`Last 5 files:`);
+      inputFiles.slice(-5).forEach(f => {
+        this.log(`  - ${path.basename(f)}`);
+      });
+    }
 
     try {
-      // First pass: concatenate with copy codec to avoid any processing artifacts
-      const tempFile = outputPath + '.temp.mp3';
-      const concatCommand = `ffmpeg -f concat -safe 0 -i "${concatFile}" -c copy "${tempFile}" -y`;
+      // Use a single-pass approach with loudnorm instead of dynaudnorm
+      // loudnorm is more predictable and doesn't clip the end of audio
+      const concatCommand = `ffmpeg -f concat -safe 0 -i "${concatFile}" -af "aresample=44100,aformat=sample_fmts=fltp:channel_layouts=mono,loudnorm=I=-16:TP=-1.5:LRA=11" -c:a libmp3lame -b:a 128k "${outputPath}" -y`;
       await execAsync(concatCommand);
       
-      // Second pass: apply normalization and add padding to prevent clipping
-      // apad=pad_dur=3 adds 3 seconds of silence at the end
-      // This ensures the last segment and End of Chapter are fully preserved
-      const normalizeCommand = `ffmpeg -i "${tempFile}" -af "aresample=44100,aformat=sample_fmts=fltp:channel_layouts=mono,dynaudnorm=f=75:g=31:p=0.95:m=100,compand=0.3|0.3:1|1:-90/-60|-60/-40|-40/-30|-20/-20:6:0:-90:0.2,apad=pad_dur=3" -c:a libmp3lame -b:a 128k "${outputPath}" -y`;
-      await execAsync(normalizeCommand);
+      this.log(`✅ Audio concatenation complete`);
       
-      // Clean up temp file
-      await fs.unlink(tempFile).catch(() => {});
+      // Verify the output file duration
+      try {
+        const { stdout } = await execAsync(`ffprobe -v quiet -show_entries format=duration -of csv=p=0 "${outputPath}"`);
+        const duration = parseFloat(stdout.trim());
+        this.log(`Final audio duration: ${duration.toFixed(2)} seconds`);
+      } catch (e) {
+        this.log(`Could not verify output duration: ${e.message}`, 'warning');
+      }
+      
     } finally {
       // Clean up concat file
       await fs.unlink(concatFile).catch(() => {});
