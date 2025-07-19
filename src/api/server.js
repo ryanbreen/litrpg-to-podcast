@@ -627,6 +627,54 @@ class APIServer {
       }
     });
 
+    // Update segment speaker assignment
+    this.fastify.put('/api/chapters/:id/segments/:index/speaker', async (request, reply) => {
+      try {
+        const chapterId = request.params.id;
+        const segmentIndex = parseInt(request.params.index);
+        const { speakerId } = request.body;
+        
+        if (!speakerId) {
+          reply.code(400);
+          return { error: 'speakerId is required' };
+        }
+        
+        this.log(`👤 Updating speaker for segment ${segmentIndex} in chapter ${chapterId} to speaker ${speakerId}`);
+        
+        // Update the speaker assignment in the database
+        await this.db.updateSegmentSpeaker(chapterId, segmentIndex, speakerId);
+        
+        // Delete the full chapter MP3 since a segment was updated
+        const chapterMp3Path = path.join(config.paths.output, `${chapterId}.mp3`);
+        try {
+          await fs.unlink(chapterMp3Path);
+          this.log(`🗑️ Deleted chapter MP3 for ${chapterId} after speaker update`);
+          
+          // Mark chapter as needing rebuild in database
+          await this.db.run(
+            `UPDATE chapters SET processed_at = NULL, audio_duration = NULL, audio_file_size = NULL WHERE id = ?`,
+            [chapterId]
+          );
+        } catch (err) {
+          // File might not exist, that's okay
+          this.log(`ℹ️ Chapter MP3 not found for deletion: ${err.message}`);
+        }
+        
+        return { 
+          success: true, 
+          message: `Segment ${segmentIndex} speaker updated to ${speakerId}`,
+          chapterId,
+          segmentIndex,
+          speakerId,
+          chapterMp3Deleted: true
+        };
+      } catch (error) {
+        this.log(`❌ Failed to update segment speaker: ${error.message}`, 'error');
+        reply.code(500);
+        return { error: error.message };
+      }
+    });
+
     // Regenerate a specific segment
     this.fastify.post('/api/chapters/:id/segments/:index/regenerate', async (request, reply) => {
       try {
@@ -642,10 +690,27 @@ class APIServer {
         const segmentFile = await worker.regenerateSegment(chapterId, segmentIndex);
         await worker.close();
         
+        // Delete the full chapter MP3 since a segment was regenerated
+        const chapterMp3Path = path.join(config.paths.output, `${chapterId}.mp3`);
+        try {
+          await fs.unlink(chapterMp3Path);
+          this.log(`🗑️ Deleted chapter MP3 for ${chapterId} after segment regeneration`);
+          
+          // Mark chapter as needing rebuild in database
+          await this.db.run(
+            `UPDATE chapters SET processed_at = NULL, audio_duration = NULL, audio_file_size = NULL WHERE id = ?`,
+            [chapterId]
+          );
+        } catch (err) {
+          // File might not exist, that's okay
+          this.log(`ℹ️ Chapter MP3 not found for deletion: ${err.message}`);
+        }
+        
         return { 
           success: true, 
-          message: `Segment ${segmentIndex} regenerated`,
-          file: segmentFile
+          message: `Segment ${segmentIndex} regenerated, chapter MP3 deleted`,
+          file: segmentFile,
+          chapterMp3Deleted: true
         };
       } catch (error) {
         this.log(`Failed to regenerate segment: ${error.message}`, 'error');
@@ -668,11 +733,25 @@ class APIServer {
         const outputFile = await worker.rebuildChapter(chapterId);
         await worker.close();
         
-        // Publish to S3 after rebuilding
+        // Publish only the rebuilt MP3 to S3
         this.log(`📤 Publishing rebuilt chapter ${chapterId} to S3...`);
         const s3Sync = new S3Sync();
-        await s3Sync.syncPodcastFiles();
-        this.log(`✅ Published rebuilt chapter ${chapterId} to S3`);
+        s3Sync.server = this; // Set server for logging
+        await s3Sync.init();
+        
+        // Upload only the rebuilt MP3 file
+        const mp3Filename = `${chapterId}.mp3`;
+        const localPath = path.join(config.paths.output, mp3Filename);
+        const s3Path = `${config.s3.prefix}audio/${mp3Filename}`;
+        
+        await s3Sync.copyFileToS3(localPath, s3Path);
+        
+        // Update published timestamp
+        await this.db.run(
+          'UPDATE chapters SET published_at = CURRENT_TIMESTAMP WHERE id = ?',
+          [chapterId]
+        );
+        this.log(`✓ Updated published timestamp for chapter ${chapterId}`);
         
         return { 
           success: true, 
