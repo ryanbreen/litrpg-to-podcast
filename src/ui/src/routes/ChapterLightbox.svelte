@@ -229,6 +229,12 @@
         return b.occurrences - a.occurrences;
       });
       
+      // Auto-start speaker identification if no segments exist
+      if (segments.length === 0 && chapter.scrapedAt && !identifyingSpeakers) {
+        console.log('No segments found, auto-starting speaker identification...');
+        await identifySpeakers();
+      }
+      
     } catch (err) {
       error = err.message;
     } finally {
