@@ -246,9 +246,22 @@ class MultiVoiceTTSWorker {
   async createSilence(durationMs, outputPath) {
     const durationSec = durationMs / 1000;
     // Use mono channel layout to match TTS-generated segments
-    const command = `ffmpeg -f lavfi -i anullsrc=r=44100:cl=mono -t ${durationSec} -q:a 9 -acodec libmp3lame "${outputPath}" -y`;
+    // Ensure bitrate matches other segments (128k) for consistency
+    const command = `ffmpeg -f lavfi -i anullsrc=r=44100:cl=mono -t ${durationSec} -c:a libmp3lame -b:a 128k "${outputPath}" -y`;
     
     await execAsync(command);
+    
+    // Verify the silence file was created with correct duration
+    try {
+      const { stdout } = await execAsync(`ffprobe -v quiet -show_entries format=duration -of csv=p=0 "${outputPath}"`);
+      const actualDuration = parseFloat(stdout.trim());
+      if (Math.abs(actualDuration - durationSec) > 0.1) {
+        this.log(`Warning: Silence file duration mismatch. Expected: ${durationSec}s, Got: ${actualDuration}s`, 'warning');
+      }
+    } catch (e) {
+      this.log(`Warning: Could not verify silence file duration: ${e.message}`, 'warning');
+    }
+    
     return outputPath;
   }
 
@@ -259,11 +272,19 @@ class MultiVoiceTTSWorker {
     await fs.writeFile(concatFile, fileList);
 
     try {
-      // Use dynamic audio normalization with compression to avoid clipping
-      // dynaudnorm applies dynamic normalization, compand adds gentle compression
-      // Add pad=whole_dur=5 to ensure we don't cut off the end
-      const command = `ffmpeg -f concat -safe 0 -i "${concatFile}" -af "aresample=44100,aformat=sample_fmts=fltp:channel_layouts=mono,dynaudnorm=f=75:g=31:p=0.95,compand=0.3|0.3:1|1:-90/-60|-60/-40|-40/-30|-20/-20:6:0:-90:0.2,apad=whole_dur=5" -c:a libmp3lame -b:a 128k "${outputPath}" -y`;
-      await execAsync(command);
+      // First pass: concatenate with copy codec to avoid any processing artifacts
+      const tempFile = outputPath + '.temp.mp3';
+      const concatCommand = `ffmpeg -f concat -safe 0 -i "${concatFile}" -c copy "${tempFile}" -y`;
+      await execAsync(concatCommand);
+      
+      // Second pass: apply normalization and add padding to prevent clipping
+      // apad=pad_dur=3 adds 3 seconds of silence at the end
+      // This ensures the last segment and End of Chapter are fully preserved
+      const normalizeCommand = `ffmpeg -i "${tempFile}" -af "aresample=44100,aformat=sample_fmts=fltp:channel_layouts=mono,dynaudnorm=f=75:g=31:p=0.95:m=100,compand=0.3|0.3:1|1:-90/-60|-60/-40|-40/-30|-20/-20:6:0:-90:0.2,apad=pad_dur=3" -c:a libmp3lame -b:a 128k "${outputPath}" -y`;
+      await execAsync(normalizeCommand);
+      
+      // Clean up temp file
+      await fs.unlink(tempFile).catch(() => {});
     } finally {
       // Clean up concat file
       await fs.unlink(concatFile).catch(() => {});
@@ -465,12 +486,16 @@ class MultiVoiceTTSWorker {
       audioFiles.push(afterEndPauseFile);
       
       // Concatenate all audio files
-      this.log('Concatenating audio segments...');
+      this.log(`Concatenating ${audioFiles.length} audio segments...`);
+      this.log(`Last 5 files: ${audioFiles.slice(-5).map(f => path.basename(f)).join(', ')}`);
       await this.concatenateAudio(audioFiles, outputFile);
 
       // Get audio duration and file size
       const { stdout } = await execAsync(`ffprobe -v quiet -show_entries format=duration -of csv=p=0 "${outputFile}"`);
       const durationSeconds = parseFloat(stdout.trim());
+      
+      // Verify the final audio file includes all expected content
+      this.log(`Final audio duration: ${durationSeconds.toFixed(2)}s`);
       
       const stats = await fs.stat(outputFile);
       const fileSize = stats.size;
