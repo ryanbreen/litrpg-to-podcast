@@ -69,6 +69,7 @@ class Database {
         speaker_id INTEGER NOT NULL,
         text TEXT NOT NULL,
         type TEXT NOT NULL DEFAULT 'narration',
+        sound TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (chapter_id) REFERENCES chapters(id) ON DELETE CASCADE,
         FOREIGN KEY (speaker_id) REFERENCES speakers(id)
@@ -111,6 +112,9 @@ class Database {
       await this.run(sql);
     }
     
+    // Run migrations for existing databases
+    await this.runMigrations();
+    
     // Insert default OpenAI voices if they don't exist
     const defaultVoices = [
       { id: 'alloy', name: 'Alloy', provider: 'openai', type: 'preset', tags: 'neutral,balanced' },
@@ -126,6 +130,17 @@ class Database {
         INSERT OR IGNORE INTO voices (id, name, provider, type, tags)
         VALUES (?, ?, ?, ?, ?)
       `, [voice.id, voice.name, voice.provider, voice.type, voice.tags]);
+    }
+  }
+
+  async runMigrations() {
+    // Check if sound column exists in chapter_segments
+    const tableInfo = await this.all(`PRAGMA table_info(chapter_segments)`);
+    const hasSoundColumn = tableInfo.some(col => col.name === 'sound');
+    
+    if (!hasSoundColumn) {
+      console.log('Adding sound column to chapter_segments table...');
+      await this.run(`ALTER TABLE chapter_segments ADD COLUMN sound TEXT`);
     }
   }
 
@@ -359,10 +374,10 @@ class Database {
       const speaker = await this.getOrCreateSpeaker(speakerName, isNarratorType);
       
       const sql = `
-        INSERT INTO chapter_segments (chapter_id, segment_index, speaker_id, text, type)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO chapter_segments (chapter_id, segment_index, speaker_id, text, type, sound)
+        VALUES (?, ?, ?, ?, ?, ?)
       `;
-      await this.run(sql, [chapterId, i, speaker.id, segment.text, segment.type || 'narration']);
+      await this.run(sql, [chapterId, i, speaker.id, segment.text, segment.type || 'narration', segment.sound || null]);
     }
 
     // Mark chapter as having speakers identified

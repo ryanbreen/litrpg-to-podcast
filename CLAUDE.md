@@ -21,7 +21,7 @@ git push origin feat/your-feature-name
 # For ANY change to src/api/ files:
 ./scripts/tmux-manager.sh restart server
 
-# For ANY change to src/ui/ files: 
+# For ANY change to src/ui/ files:
 ./scripts/tmux-manager.sh restart ui
 ```
 
@@ -91,7 +91,7 @@ npm run tmux stop
 ### Tmux Pane Layout
 
 - **server** (pane 0): API server running on port 8383
-- **ui** (pane 1): SvelteKit UI running on port 5174  
+- **ui** (pane 1): SvelteKit UI running on port 5174
 - **worker** (pane 2): Available for manual commands
 - **logs** (pane 3): Available for manual commands
 
@@ -110,11 +110,11 @@ npm run tmux stop
    ```bash
    # For API changes - MANDATORY RESTART
    npm run tmux restart server
-   
-   # For UI changes - MANDATORY RESTART  
+
+   # For UI changes - MANDATORY RESTART
    npm run tmux restart ui
    ```
-   
+
    **⚠️ CODE CHANGES DO NOT TAKE EFFECT UNTIL RESTART ⚠️**
    **⚠️ ALWAYS RESTART IMMEDIATELY AFTER EDITING CODE ⚠️**
 
@@ -265,8 +265,7 @@ The system uses `character-config.json` to manage character aliases and pronunci
     }
   },
   "pronunciations": {
-    "lvl": "level",
-    "malefic": "muh-lef-ik"
+    "lvl": "level"
   }
 }
 ```
@@ -284,7 +283,7 @@ The system uses `character-config.json` to manage character aliases and pronunci
 - Applied during text preprocessing before TTS
 
 ### Usage
-1. Edit `character-config.json` 
+1. Edit `character-config.json`
 2. Restart server: `npm run tmux restart server`
 3. Changes apply to all new speaker identification
 
