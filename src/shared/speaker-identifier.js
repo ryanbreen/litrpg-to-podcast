@@ -16,23 +16,68 @@ export function splitDialogueNarration(passage) {
   // Straight quote ("), curly open ("), curly close (")
   const isQuote = c => c === '"' || c === String.fromCharCode(8220) || c === String.fromCharCode(8221);
 
-  for (let i = 0; i < passage.length; i += 1) {
-    if (isQuote(passage[i])) {
-      if (!inQuote && i > start) {
-        segments.push({ type: 'narration', text: passage.slice(start, i) });
-        start = i;
+  // First, split out any lines that start with 'DING!' or variations
+  const lines = passage.split('\n');
+  const processedLines = [];
+  
+  for (const line of lines) {
+    const trimmedLine = line.trim();
+    // Check if this line is a DING! notification
+    if (trimmedLine.startsWith("'DING!'") || trimmedLine.startsWith("DING!") || 
+        trimmedLine.startsWith("'Ding!'") || trimmedLine.startsWith("Ding!") ||
+        trimmedLine.startsWith("'ding!'") || trimmedLine.startsWith("ding!")) {
+      // Add what we have so far as a segment
+      if (processedLines.length > 0) {
+        const textSoFar = processedLines.join('\n');
+        if (textSoFar.trim()) {
+          // Process the text before the DING! line
+          const beforeSegments = splitText(textSoFar);
+          segments.push(...beforeSegments);
+        }
+        processedLines.length = 0;
       }
-      inQuote = !inQuote;
-      if (!inQuote) {
-        // we just closed a quote
-        segments.push({ type: 'dialogue', text: passage.slice(start, i + 1) });
-        start = i + 1;
-      }
+      // Add the DING! line as its own segment
+      segments.push({ type: 'narration', text: line });
+    } else {
+      processedLines.push(line);
     }
   }
-  if (start < passage.length) {
-    segments.push({ type: inQuote ? 'dialogue' : 'narration', text: passage.slice(start) });
+  
+  // Process any remaining lines
+  if (processedLines.length > 0) {
+    const remainingText = processedLines.join('\n');
+    if (remainingText.trim()) {
+      const remainingSegments = splitText(remainingText);
+      segments.push(...remainingSegments);
+    }
   }
+  
+  // Helper function to split text by quotes
+  function splitText(text) {
+    const textSegments = [];
+    let textStart = 0;
+    let textInQuote = false;
+    
+    for (let i = 0; i < text.length; i += 1) {
+      if (isQuote(text[i])) {
+        if (!textInQuote && i > textStart) {
+          textSegments.push({ type: 'narration', text: text.slice(textStart, i) });
+          textStart = i;
+        }
+        textInQuote = !textInQuote;
+        if (!textInQuote) {
+          // we just closed a quote
+          textSegments.push({ type: 'dialogue', text: text.slice(textStart, i + 1) });
+          textStart = i + 1;
+        }
+      }
+    }
+    if (textStart < text.length) {
+      textSegments.push({ type: textInQuote ? 'dialogue' : 'narration', text: text.slice(textStart) });
+    }
+    return textSegments;
+  }
+  
   return segments.filter(s => s.text.trim() !== '');
 }
 

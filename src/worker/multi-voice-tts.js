@@ -40,7 +40,7 @@ class MultiVoiceTTSWorker {
     await this.db.init();
   }
 
-  async generateSpeechSegment(text, voice, outputPath, segmentType = null) {
+  async generateSpeechSegment(text, voice, outputPath, segmentType = null, sound = null) {
     // Check if this is a pause marker
     if (text.trim() === '<pause3s>') {
       this.log(`Creating 3-second pause...`);
@@ -49,8 +49,11 @@ class MultiVoiceTTSWorker {
     }
     
     // Check if this is a DING! sound effect
-    if (segmentType === 'sound_effect' && (text.trim() === 'DING!' || text.trim() === 'Ding!' || text.trim() === 'ding!')) {
-      this.log(`🔔 Using ding sound effect...`);
+    if ((segmentType === 'sound_effect' && sound === 'ding') || 
+        (text.trim() === 'DING!' || text.trim() === 'Ding!' || text.trim() === 'ding!' ||
+         text.trim() === "'DING!'" || text.trim() === "'Ding!'" || text.trim() === "'ding!'" ||
+         text.trim().startsWith("'DING!'") || text.trim().startsWith("DING!"))) {
+      this.log(`🔔 Using ding sound effect for: ${text.trim()}`);
       const dingFile = path.join('public', 'audio', 'ding.mp3');
       await fs.copyFile(dingFile, outputPath);
       return;
@@ -415,7 +418,7 @@ class MultiVoiceTTSWorker {
           this.log(`Using cached segment: ${path.basename(segmentFile)}`);
         } catch {
           // Generate new segment
-          await this.generateSpeechSegment(segment.text, voice, segmentFile, segment.type);
+          await this.generateSpeechSegment(segment.text, voice, segmentFile, segment.type, segment.sound);
           this.log(`Generated new segment: ${path.basename(segmentFile)}`);
         }
         
@@ -609,7 +612,7 @@ class MultiVoiceTTSWorker {
     }
     
     // Generate new segment
-    await this.generateSpeechSegment(segment.text, voice, segmentFile, segment.type);
+    await this.generateSpeechSegment(segment.text, voice, segmentFile, segment.type, segment.sound);
     
     this.log(`✅ Regenerated segment ${segmentIndex}: ${path.basename(segmentFile)}`);
     return segmentFile;
