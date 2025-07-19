@@ -10,6 +10,19 @@ import { S3Sync } from '../shared/s3-sync.js';
 
 const execAsync = promisify(exec);
 
+// Custom exec with larger buffer for ffmpeg operations
+const execAsyncLarge = (command) => {
+  return new Promise((resolve, reject) => {
+    exec(command, { maxBuffer: 50 * 1024 * 1024 }, (error, stdout, stderr) => {
+      if (error) {
+        reject(error);
+      } else {
+        resolve({ stdout, stderr });
+      }
+    });
+  });
+};
+
 class MultiVoiceTTSWorker {
   constructor() {
     this.db = new Database();
@@ -284,10 +297,18 @@ class MultiVoiceTTSWorker {
     }
 
     try {
-      // Use a single-pass approach with loudnorm instead of dynaudnorm
-      // loudnorm is more predictable and doesn't clip the end of audio
-      const concatCommand = `ffmpeg -f concat -safe 0 -i "${concatFile}" -af "aresample=44100,aformat=sample_fmts=fltp:channel_layouts=mono,loudnorm=I=-16:TP=-1.5:LRA=11" -c:a libmp3lame -b:a 128k "${outputPath}" -y`;
-      await execAsync(concatCommand);
+      // Use a two-pass approach for safety with large files
+      // First pass: concatenate with forced resampling to handle any format inconsistencies
+      const tempFile = outputPath + '.temp.mp3';
+      const concatCommand = `ffmpeg -f concat -safe 0 -i "${concatFile}" -ar 44100 -ac 1 -c:a libmp3lame -b:a 128k "${tempFile}" -y`;
+      await execAsyncLarge(concatCommand);
+      
+      // Second pass: apply loudnorm for consistent volume
+      const normalizeCommand = `ffmpeg -i "${tempFile}" -af "loudnorm=I=-16:TP=-1.5:LRA=11" -c:a libmp3lame -b:a 128k "${outputPath}" -y`;
+      await execAsyncLarge(normalizeCommand);
+      
+      // Clean up temp file
+      await fs.unlink(tempFile).catch(() => {});
       
       this.log(`✅ Audio concatenation complete`);
       
@@ -914,16 +935,29 @@ class MultiVoiceTTSWorker {
     debugOutput += `File list saved to: ${fileListPath}\n`;
     debugOutput += `File list contents:\n${fileListContent}\n\n`;
     
-    // Run ffmpeg with verbose output and re-encoding to ensure consistent format
-    const ffmpegCmd = `ffmpeg -f concat -safe 0 -i "${fileListPath}" -af "aresample=44100,aformat=sample_fmts=fltp:channel_layouts=mono,loudnorm=I=-16:TP=-1.5:LRA=11" -c:a libmp3lame -b:a 128k -y "${outputFile}" -v verbose`;
-    debugOutput += `Command: ${ffmpegCmd}\n\n`;
-    debugOutput += `Note: Using re-encoding with audio filtering to normalize channels and sample rate\n\n`;
+    // Run ffmpeg with forced resampling to handle format inconsistencies
+    const tempFile = outputFile + '.temp.mp3';
+    const concatCmd = `ffmpeg -f concat -safe 0 -i "${fileListPath}" -ar 44100 -ac 1 -c:a libmp3lame -b:a 128k -y "${tempFile}"`;
+    const normalizeCmd = `ffmpeg -i "${tempFile}" -af "loudnorm=I=-16:TP=-1.5:LRA=11" -c:a libmp3lame -b:a 128k -y "${outputFile}"`;
+    
+    debugOutput += `Commands:\n`;
+    debugOutput += `1. Concatenate: ${concatCmd}\n`;
+    debugOutput += `2. Normalize: ${normalizeCmd}\n\n`;
+    debugOutput += `Note: Using two-pass approach to handle format inconsistencies\n\n`;
     
     try {
-      const { stdout, stderr } = await execAsync(ffmpegCmd);
-      debugOutput += `=== FFMPEG OUTPUT ===\n`;
-      debugOutput += `STDOUT:\n${stdout}\n\n`;
-      debugOutput += `STDERR:\n${stderr}\n\n`;
+      // First pass
+      const { stdout: stdout1, stderr: stderr1 } = await execAsyncLarge(concatCmd);
+      debugOutput += `=== CONCATENATION OUTPUT ===\n`;
+      debugOutput += `STDERR:\n${stderr1.slice(-2000)}\n\n`; // Last 2000 chars to avoid overflow
+      
+      // Second pass
+      const { stdout: stdout2, stderr: stderr2 } = await execAsyncLarge(normalizeCmd);
+      debugOutput += `=== NORMALIZATION OUTPUT ===\n`;
+      debugOutput += `STDERR:\n${stderr2.slice(-2000)}\n\n`;
+      
+      // Clean up temp file
+      await fs.unlink(tempFile).catch(() => {});
       
       // Verify output file
       const outputStats = await fs.stat(outputFile);
