@@ -3,12 +3,21 @@ import { promisify } from 'util';
 import fs from 'fs/promises';
 import path from 'path';
 import config from './config.js';
+import { Database } from './database.js';
 
 const execAsync = promisify(exec);
 
 class S3Sync {
   constructor() {
     this.server = null; // Set by API server for logging
+    this.db = null;
+  }
+  
+  async init() {
+    if (!this.db) {
+      this.db = new Database();
+      await this.db.init();
+    }
   }
   
   log(message, level = 'info') {
@@ -110,6 +119,19 @@ class S3Sync {
           if (stdout.includes('upload:')) {
             totalUploaded++;
             this.log(`✓ Uploaded ${file}`);
+            
+            // Update published_at timestamp for MP3 files
+            if (file.endsWith('.mp3')) {
+              const chapterId = file.replace('.mp3', '');
+              if (chapterId.match(/^\d+$/)) {
+                await this.init(); // Ensure database is initialized
+                await this.db.run(
+                  'UPDATE chapters SET published_at = CURRENT_TIMESTAMP WHERE id = ?',
+                  [chapterId]
+                );
+                this.log(`✓ Updated published timestamp for chapter ${chapterId}`);
+              }
+            }
           }
           
           allOutput += stdout;
@@ -196,6 +218,17 @@ class S3Sync {
         try {
           await this.copyFileToS3(localPath, s3Path);
           audioUploads++;
+          
+          // Update published_at timestamp for the chapter
+          const chapterId = mp3File.replace('.mp3', '');
+          if (chapterId.match(/^\d+$/)) {
+            await this.init(); // Ensure database is initialized
+            await this.db.run(
+              'UPDATE chapters SET published_at = CURRENT_TIMESTAMP WHERE id = ?',
+              [chapterId]
+            );
+            this.log(`✓ Updated published timestamp for chapter ${chapterId}`);
+          }
         } catch (error) {
           // Continue with other files if one fails
           this.log(`Warning: Failed to upload ${mp3File}: ${error.message}`, 'warning');

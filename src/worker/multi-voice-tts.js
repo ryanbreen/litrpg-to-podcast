@@ -457,6 +457,11 @@ class MultiVoiceTTSWorker {
       await this.generateSpeechSegment('End of Chapter', narratorVoice, endChapterFile);
       audioFiles.push(endChapterFile);
       
+      // Add 2-second pause after "End of Chapter"
+      const afterEndPauseFile = path.join(segmentsDir, `after_end_pause.mp3`);
+      await this.createSilence(2000, afterEndPauseFile);
+      audioFiles.push(afterEndPauseFile);
+      
       // Concatenate all audio files
       this.log('Concatenating audio segments...');
       await this.concatenateAudio(audioFiles, outputFile);
@@ -665,6 +670,15 @@ class MultiVoiceTTSWorker {
     }
     audioFiles.push(endChapterFile);
     
+    // Add 2-second pause after "End of Chapter"
+    const afterEndPauseFile = path.join(segmentsDir, `after_end_pause.mp3`);
+    try {
+      await fs.access(afterEndPauseFile);
+    } catch {
+      await this.createSilence(2000, afterEndPauseFile);
+    }
+    audioFiles.push(afterEndPauseFile);
+    
     // Concatenate all audio files
     this.log(`Concatenating ${audioFiles.length} audio files...`);
     await this.concatenateAudio(audioFiles, outputFile);
@@ -822,6 +836,19 @@ class MultiVoiceTTSWorker {
                           { id: 'nova', name: 'Nova (Narrator)', provider: 'openai', settings: {} };
       await this.generateSpeechSegment('End of Chapter', narratorVoice, endChapterFile);
       audioFiles.push(endChapterFile);
+    }
+    
+    // Add 2-second pause after "End of Chapter"
+    const afterEndPauseFile = path.join(segmentsDir, `after_end_pause.mp3`);
+    debugOutput += `After end pause file: ${path.basename(afterEndPauseFile)}\n`;
+    try {
+      const afterEndPauseStats = await fs.stat(afterEndPauseFile);
+      debugOutput += `After end pause status: EXISTS (${afterEndPauseStats.size} bytes)\n`;
+      audioFiles.push(afterEndPauseFile);
+    } catch {
+      debugOutput += `After end pause status: MISSING - Creating 2000ms pause\n`;
+      await this.createSilence(2000, afterEndPauseFile);
+      audioFiles.push(afterEndPauseFile);
     }
     
     debugOutput += `\n`;

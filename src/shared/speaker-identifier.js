@@ -510,9 +510,10 @@ Be conservative - when in doubt, split into more segments rather than risk wrong
 Known characters from previous chapters: ${knownCharacters || 'None yet'}${characterContext}
 
 Your task is to:
-1. For dialogue segments: identify the speaking character based on context
+1. For dialogue segments: identify the speaking character based on context clues from surrounding segments
 2. For narration segments: confirm they should be attributed to "narrator"
 3. Identify special cases like AI announcements or sound effects
+4. Use the beforeContext and afterContext fields to understand who is speaking
 
 Return JSON with this structure:
 {
@@ -525,9 +526,17 @@ Return JSON with this structure:
   ]
 }
 
+ATTRIBUTION TIPS:
+- Look for attribution phrases like "X said", "X replied", "X asked" in nearby narration segments
+- If dialogue follows "the dwarf said" in context, attribute to "dwarf"
+- If dialogue follows "the Fallen King added" in context, attribute to "Fallen King"
+- Track conversation flow - responses usually alternate between speakers
+- Pay attention to pronouns and descriptors in surrounding narration
+
 RULES:
-- Use character names exactly as they appear in the known characters list
+- Use character names exactly as they appear in the known characters list OR context
 - For character aliases (e.g., Villy = Vilastromoz), use the main name
+- Common unnamed speakers: "dwarf", "elf", "guard", "merchant", etc. are valid speaker names
 - If speaker is unclear from context, use "unknown"
 - Preserve the exact text without modification`;
 
@@ -554,11 +563,31 @@ RULES:
         this.log(`🎭 Processing attribution batch ${batchIndex}/${totalBatches}`);
         
         // Create a simplified input for GPT with indices
-        const batchInput = batch.map((seg, idx) => ({
-          index: i + idx,
-          type: seg.type,
-          text: seg.text
-        }));
+        // Include context from surrounding segments for better attribution
+        const contextWindow = 5; // Look at 5 segments before and after
+        const batchWithContext = batch.map((seg, idx) => {
+          const globalIdx = i + idx;
+          const contextStart = Math.max(0, globalIdx - contextWindow);
+          const contextEnd = Math.min(rawSegments.length, globalIdx + contextWindow + 1);
+          
+          const beforeContext = rawSegments.slice(contextStart, globalIdx)
+            .map(s => `[${s.type}] ${s.text.substring(0, 100)}...`)
+            .join('\n');
+          
+          const afterContext = rawSegments.slice(globalIdx + 1, contextEnd)
+            .map(s => `[${s.type}] ${s.text.substring(0, 100)}...`)
+            .join('\n');
+          
+          return {
+            index: globalIdx,
+            type: seg.type,
+            text: seg.text,
+            beforeContext: beforeContext || 'START OF TEXT',
+            afterContext: afterContext || 'END OF TEXT'
+          };
+        });
+        
+        const batchInput = batchWithContext;
         
         const response = await this.openai.chat.completions.create({
           model: "gpt-4-turbo-2024-04-09",

@@ -746,7 +746,9 @@
   
   function formatDate(dateString) {
     if (!dateString) return 'Not started';
-    const date = new Date(dateString);
+    // Append 'Z' to indicate UTC if not already present
+    const utcString = dateString.includes('Z') || dateString.includes('+') ? dateString : dateString + 'Z';
+    const date = new Date(utcString);
     return date.toLocaleDateString('en-US', { 
       month: 'short', 
       day: 'numeric',

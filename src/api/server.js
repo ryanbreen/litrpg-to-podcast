@@ -668,9 +668,15 @@ class APIServer {
         const outputFile = await worker.rebuildChapter(chapterId);
         await worker.close();
         
+        // Publish to S3 after rebuilding
+        this.log(`📤 Publishing rebuilt chapter ${chapterId} to S3...`);
+        const s3Sync = new S3Sync();
+        await s3Sync.syncPodcastFiles();
+        this.log(`✅ Published rebuilt chapter ${chapterId} to S3`);
+        
         return { 
           success: true, 
-          message: `Chapter ${chapterId} rebuilt from cached segments`,
+          message: `Chapter ${chapterId} rebuilt and published to S3`,
           file: outputFile
         };
       } catch (error) {
@@ -1668,6 +1674,12 @@ class APIServer {
       
       this.log('✅ Multi-voice TTS processing complete');
       
+      // Publish to S3 after processing all chapters
+      this.log('📤 Publishing all generated audio to S3...');
+      const s3Sync = new S3Sync();
+      await s3Sync.syncPodcastFiles();
+      this.log('✅ Published all audio to S3');
+      
     } catch (error) {
       this.log(`❌ Multi-voice TTS processing failed: ${error.message}`, 'error');
     }
@@ -1684,6 +1696,12 @@ class APIServer {
       const outputFile = await worker.processChapter(chapterId);
       
       this.log(`✅ Audio generated: ${outputFile}`);
+      
+      // Publish to S3 after processing chapter
+      this.log(`📤 Publishing chapter ${chapterId} to S3...`);
+      const s3Sync = new S3Sync();
+      await s3Sync.syncPodcastFiles();
+      this.log(`✅ Published chapter ${chapterId} to S3`);
       
     } catch (error) {
       this.log(`❌ Audio generation failed for chapter ${chapterId}: ${error.message}`, 'error');
