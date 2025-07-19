@@ -30,10 +30,19 @@
   let speakerIdProgress = null;
   let speakerIdPollInterval = null;
   let streamingSegments = []; // Segments that are streaming in real-time
+  let speakerViewMode = 'segments'; // 'segments' or 'speakers'
+  let allSegments = []; // All segments in order for the new view
+  let uniqueSpeakers = []; // Unique speakers list for dropdowns
+  let buildInfo = null;
+  let buildProgress = null;
+  let buildLogs = [];
+  let building = false;
+  let buildPollInterval = null;
   
   $: if (mode === 'edit') loadChapterText();
   $: if (mode === 'speakers') loadSpeakers();
   $: if (mode === 'tts') loadTTSInfo();
+  $: if (mode === 'build') loadBuildInfo();
   $: if (mode === 'publish') loadPublishInfo();
   
   // Subscribe to voices store for real-time updates
@@ -190,11 +199,34 @@
       // Extract segments array from response
       const segments = segmentsData.segments || [];
       
-      // Group segments by speaker
+      // Create allSegments for the new segment-based view
+      allSegments = segments.map(segmentData => {
+        const segment = segmentData.segment;
+        return {
+          index: segment.segment_index,
+          text: segment.text || '',
+          type: segment.type,
+          speakerName: segment.speaker_name,
+          speakerId: segment.speaker_id,
+          voiceId: segment.voice_id,
+          voiceName: segment.voice_name,
+          isNarrator: segment.is_narrator,
+          isUnmatched: !segment.speaker_name || segment.speaker_name === 'Unknown'
+        };
+      }).sort((a, b) => a.index - b.index);
+      
+      // Create unique speakers list for dropdowns
+      const speakerSet = new Set();
       const speakerMap = {};
+      
       segments.forEach(segmentData => {
-        const segment = segmentData.segment; // Extract the nested segment data
+        const segment = segmentData.segment;
         const speakerName = segment.speaker_name;
+        
+        if (speakerName && speakerName !== 'Unknown') {
+          speakerSet.add(speakerName);
+        }
+        
         if (!speakerMap[speakerName]) {
           speakerMap[speakerName] = {
             name: speakerName,
@@ -214,6 +246,9 @@
           type: segment.type
         });
       });
+      
+      // Create uniqueSpeakers list for dropdowns
+      uniqueSpeakers = Array.from(speakerSet).sort();
       
       // Convert to array and add colors
       const colors = ['#4CAF50', '#2196F3', '#FF9800', '#9C27B0', '#F44336', '#607D8B', '#795548', '#E91E63'];
@@ -270,6 +305,48 @@
     }
   }
   
+  async function loadBuildInfo() {
+    loading = true;
+    try {
+      // Check if MP3 exists
+      const mp3Exists = await checkMp3Exists();
+      
+      // Load segment info
+      const response = await fetch(`${API_URL}/api/chapters/${chapter.id}/segments`);
+      if (response.ok) {
+        const data = await response.json();
+        const segments = data.segments || [];
+        
+        buildInfo = {
+          mp3Exists,
+          totalSegments: segments.length,
+          cachedSegments: segments.filter(seg => seg.exists).length,
+          missingSegments: segments.filter(seg => !seg.exists).length,
+          segments: segments,
+          chapterProcessed: !!chapter.processedAt,
+          audioFile: mp3Exists ? `${chapter.id}.mp3` : null,
+          audioDuration: chapter.duration,
+          audioFileSize: chapter.fileSize
+        };
+      }
+    } catch (err) {
+      error = err.message;
+    } finally {
+      loading = false;
+    }
+  }
+
+  async function checkMp3Exists() {
+    try {
+      const response = await fetch(`${API_URL}/api/audio/${chapter.id}/${chapter.id}.mp3`, {
+        method: 'HEAD'
+      });
+      return response.ok;
+    } catch {
+      return false;
+    }
+  }
+
   async function loadPublishInfo() {
     loading = true;
     try {
@@ -358,6 +435,68 @@
     }
   }
   
+  async function updateSegmentSpeaker(segmentIndex, newSpeakerName) {
+    try {
+      // Find the new speaker's ID from the uniqueSpeakers list
+      const newSpeaker = speakers.find(s => s.name === newSpeakerName);
+      if (!newSpeaker) {
+        console.error('Speaker not found:', newSpeakerName);
+        return;
+      }
+
+      // Update the local segment data
+      const segment = allSegments.find(s => s.index === segmentIndex);
+      if (segment) {
+        const oldSpeakerName = segment.speakerName;
+        
+        // Collect all segments that need updating (before changing anything)
+        const segmentsToUpdate = allSegments.filter(seg => 
+          seg.speakerName === oldSpeakerName
+        );
+        
+        // Update all affected segments locally
+        segmentsToUpdate.forEach(seg => {
+          seg.speakerName = newSpeakerName;
+          seg.speakerId = newSpeaker.speakerId;
+          seg.isUnmatched = false;
+        });
+        
+        // Trigger reactivity
+        allSegments = [...allSegments];
+        
+        // Send updates to server for all affected segments
+        const updatePromises = segmentsToUpdate.map(seg => 
+          updateSegmentSpeakerOnServer(seg.index, newSpeaker.speakerId)
+        );
+        
+        await Promise.all(updatePromises);
+        console.log(`Updated speaker for ${segmentsToUpdate.length} segments from "${oldSpeakerName}" to "${newSpeakerName}"`);
+      }
+    } catch (err) {
+      console.error('Failed to update segment speaker:', err);
+    }
+  }
+
+  async function updateSegmentSpeakerOnServer(segmentIndex, newSpeakerId) {
+    try {
+      const response = await fetch(`${API_URL}/api/chapters/${chapter.id}/segments/${segmentIndex}/speaker`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ speakerId: newSpeakerId })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to update segment speaker: ${response.statusText}`);
+      }
+
+      const result = await response.json();
+      console.log('Server response:', result);
+    } catch (err) {
+      console.error('Failed to update segment speaker on server:', err);
+      throw err;
+    }
+  }
+
   async function assignVoice(speakerId, voiceId, voiceName) {
     try {
       const response = await fetch(`${API_URL}/api/speakers/${speakerId}/voice`, {
@@ -736,6 +875,83 @@
     if (voicesPollInterval) {
       clearInterval(voicesPollInterval);
       voicesPollInterval = null;
+    }
+  }
+  
+  async function startBuild(forceRebuild = false) {
+    building = true;
+    buildLogs = [];
+    buildProgress = {
+      status: 'starting',
+      message: forceRebuild ? 'Force rebuilding chapter MP3...' : 'Building chapter MP3...'
+    };
+    
+    try {
+      const endpoint = forceRebuild ? 
+        `/api/chapters/${chapter.id}/rebuild` : 
+        `/api/chapters/${chapter.id}/debug-merge`;
+        
+      const response = await fetch(`${API_URL}${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+      });
+      
+      if (!response.ok) throw new Error('Failed to start build');
+      
+      const result = await response.json();
+      
+      if (result.debugOutput) {
+        // Parse debug output into logs
+        buildLogs = result.debugOutput.split('\n').filter(line => line.trim());
+        buildProgress = {
+          status: 'completed',
+          message: 'Build completed successfully'
+        };
+      }
+      
+      // S3 sync is now handled automatically by the rebuild endpoint
+      // No need to call syncToS3() separately
+      
+      // Reload build info
+      await loadBuildInfo();
+      
+    } catch (err) {
+      error = err.message;
+      buildProgress = {
+        status: 'error',
+        message: err.message
+      };
+    } finally {
+      building = false;
+    }
+  }
+  
+  async function syncToS3() {
+    try {
+      buildProgress = {
+        status: 'syncing',
+        message: 'Syncing to S3...'
+      };
+      
+      const response = await fetch(`${API_URL}/api/sync/s3`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+      });
+      
+      if (!response.ok) throw new Error('Failed to sync to S3');
+      
+      buildProgress = {
+        status: 'completed',
+        message: 'Successfully synced to S3'
+      };
+      
+    } catch (err) {
+      buildProgress = {
+        status: 'error',
+        message: `S3 sync failed: ${err.message}`
+      };
     }
   }
   
@@ -1939,6 +2155,380 @@
     line-height: 1.4;
     word-wrap: break-word;
   }
+
+  /* New Segment View Styles */
+  .view-toggle {
+    display: flex;
+    gap: 0.5rem;
+    margin-right: 1rem;
+  }
+
+  .toggle-button {
+    padding: 0.5rem 1rem;
+    border: 1px solid #ddd;
+    background: white;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .toggle-button:hover {
+    background: #f5f5f5;
+  }
+
+  .toggle-button.active {
+    background: #007bff;
+    color: white;
+    border-color: #007bff;
+  }
+
+  .speakers-header-actions {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+    flex-wrap: wrap;
+    gap: 1rem;
+  }
+
+  .segments-view {
+    width: 100%;
+  }
+
+  .segments-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid #eee;
+  }
+
+  .segments-header h4 {
+    margin: 0;
+    color: #333;
+  }
+
+  .unmatched-count {
+    background: #ff6b6b;
+    color: white;
+    padding: 0.25rem 0.75rem;
+    border-radius: 12px;
+    font-size: 0.875rem;
+    font-weight: 500;
+  }
+
+  .segments-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .segment-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 1rem;
+    padding: 1rem;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    background: white;
+    transition: all 0.2s;
+  }
+
+  .segment-row:hover {
+    border-color: #ccc;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  }
+
+  .segment-row.unmatched {
+    border-color: #ff6b6b;
+    background: #fff5f5;
+  }
+
+  .segment-index {
+    font-weight: 600;
+    color: #666;
+    min-width: 3rem;
+    text-align: center;
+    background: #f8f9fa;
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.875rem;
+  }
+
+  .segment-content {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .segment-type-badge {
+    display: inline-block;
+    padding: 0.125rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 500;
+    margin-bottom: 0.5rem;
+    text-transform: uppercase;
+  }
+
+  .segment-type-badge.dialogue {
+    background: #e3f2fd;
+    color: #1976d2;
+  }
+
+  .segment-type-badge.narration {
+    background: #f3e5f5;
+    color: #7b1fa2;
+  }
+
+  .segment-type-badge.thought {
+    background: #fff3e0;
+    color: #f57c00;
+  }
+
+  .speaker-assignment {
+    min-width: 200px;
+  }
+
+  .speaker-select {
+    width: 100%;
+    padding: 0.5rem;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    background: white;
+  }
+
+  .assigned-speaker {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem;
+    background: #f8f9fa;
+    border-radius: 4px;
+  }
+
+  .assigned-speaker .speaker-name {
+    font-weight: 500;
+    color: #333;
+  }
+
+  .assigned-speaker .narrator-badge {
+    background: #6c757d;
+    color: white;
+    padding: 0.125rem 0.375rem;
+    border-radius: 10px;
+    font-size: 0.625rem;
+    font-weight: 600;
+    text-transform: uppercase;
+  }
+
+  .change-speaker-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 0.25rem;
+    border-radius: 4px;
+    opacity: 0.6;
+    transition: opacity 0.2s;
+  }
+
+  .change-speaker-btn:hover {
+    opacity: 1;
+    background: #e9ecef;
+  }
+  
+  /* Build Mode Styles */
+  .build-container {
+    width: 100%;
+    padding: 1rem;
+  }
+  
+  .build-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2rem;
+  }
+  
+  .build-summary {
+    background: white;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    padding: 1.5rem;
+  }
+  
+  .build-summary h3 {
+    margin-top: 0;
+    margin-bottom: 1rem;
+    color: #333;
+  }
+  
+  .build-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+  }
+  
+  .build-actions {
+    display: flex;
+    gap: 1rem;
+    margin-top: 1.5rem;
+  }
+  
+  .force-rebuild {
+    background: #dc3545 !important;
+    border-color: #dc3545 !important;
+  }
+  
+  .force-rebuild:hover:not(:disabled) {
+    background: #c82333 !important;
+    border-color: #bd2130 !important;
+  }
+  
+  .build-progress {
+    background: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+    padding: 1.5rem;
+  }
+  
+  .build-progress h4 {
+    margin-top: 0;
+    margin-bottom: 1rem;
+    color: #495057;
+  }
+  
+  .progress-status {
+    padding: 0.75rem;
+    border-radius: 4px;
+    font-weight: 500;
+  }
+  
+  .progress-status.starting {
+    background: #cfe2ff;
+    color: #004085;
+  }
+  
+  .progress-status.syncing {
+    background: #d1ecf1;
+    color: #0c5460;
+  }
+  
+  .progress-status.completed {
+    background: #d4edda;
+    color: #155724;
+  }
+  
+  .progress-status.error {
+    background: #f8d7da;
+    color: #721c24;
+  }
+  
+  .build-logs {
+    background: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+    padding: 1.5rem;
+  }
+  
+  .build-logs h4 {
+    margin-top: 0;
+    margin-bottom: 1rem;
+    color: #495057;
+  }
+  
+  .log-container {
+    background: white;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    max-height: 400px;
+    overflow-y: auto;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 0.875rem;
+  }
+  
+  .log-line {
+    display: flex;
+    padding: 0.25rem 0.5rem;
+    border-bottom: 1px solid #f0f0f0;
+    word-break: break-word;
+  }
+  
+  .log-line:hover {
+    background: #f8f9fa;
+  }
+  
+  .log-line.highlight {
+    background: #fff3cd;
+    font-weight: 600;
+  }
+  
+  .log-number {
+    min-width: 3rem;
+    color: #6c757d;
+    margin-right: 1rem;
+    user-select: none;
+  }
+  
+  .log-text {
+    flex: 1;
+    white-space: pre-wrap;
+  }
+  
+  .segment-list {
+    background: white;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    padding: 1.5rem;
+  }
+  
+  .segment-list h4 {
+    margin-top: 0;
+    margin-bottom: 1rem;
+    color: #333;
+  }
+  
+  .segment-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 0.5rem;
+    max-height: 200px;
+    overflow-y: auto;
+  }
+  
+  .segment-file {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.25rem 0.5rem;
+    background: #f8f9fa;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-family: monospace;
+  }
+  
+  .segment-file.missing {
+    background: #fff5f5;
+    color: #dc3545;
+  }
+  
+  .segment-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  
+  .segment-status {
+    margin-left: 0.5rem;
+  }
+  
+  .stat-value.exists {
+    color: #28a745;
+  }
+  
+  .stat-value.missing {
+    color: #dc3545;
+  }
 </style>
 
 <svelte:window on:keydown={handleKeydown} />
@@ -1953,6 +2543,8 @@
           Speaker Identification
         {:else if mode === 'tts'}
           TTS Generation
+        {:else if mode === 'build'}
+          MP3 Build & Debug
         {:else if mode === 'publish'}
           Publishing Status
         {/if}
@@ -2123,11 +2715,94 @@
             </div>
           {:else}
             <div class="speakers-header-actions">
+              <div class="view-toggle">
+                <button 
+                  class="toggle-button"
+                  class:active={speakerViewMode === 'segments'}
+                  on:click={() => speakerViewMode = 'segments'}
+                >
+                  📋 Segments View
+                </button>
+                <button 
+                  class="toggle-button"
+                  class:active={speakerViewMode === 'speakers'}
+                  on:click={() => speakerViewMode = 'speakers'}
+                >
+                  👥 Speakers View
+                </button>
+              </div>
               <button class="primary-button" on:click={markSpeakerIdComplete}>
                 ✅ Mark Speaker ID Complete
               </button>
             </div>
-            {#each speakers as speaker}
+            
+            {#if speakerViewMode === 'segments'}
+              <!-- New segment-based view -->
+              <div class="segments-view">
+                <div class="segments-header">
+                  <h4>All Segments ({allSegments.length})</h4>
+                  <div class="unmatched-count">
+                    {allSegments.filter(s => s.isUnmatched).length} unmatched
+                  </div>
+                </div>
+                
+                <div class="segments-list">
+                  {#each allSegments as segment}
+                    <div class="segment-row" class:unmatched={segment.isUnmatched}>
+                      <div class="segment-index">#{segment.index}</div>
+                      
+                      <div class="segment-content">
+                        <div class="segment-type-badge {segment.type}">
+                          {segment.type}
+                        </div>
+                        <div class="segment-text">
+                          {segment.text.length > 200 ? segment.text.substring(0, 200) + '...' : segment.text}
+                        </div>
+                      </div>
+                      
+                      <div class="speaker-assignment">
+                        {#if segment.isUnmatched}
+                          <select 
+                            class="speaker-select"
+                            value=""
+                            on:change={(e) => {
+                              if (e.target.value) {
+                                updateSegmentSpeaker(segment.index, e.target.value);
+                              }
+                            }}
+                          >
+                            <option value="">Select Speaker...</option>
+                            {#each uniqueSpeakers as speakerName}
+                              <option value={speakerName}>{speakerName}</option>
+                            {/each}
+                          </select>
+                        {:else}
+                          <div class="assigned-speaker">
+                            <span class="speaker-name">{segment.speakerName}</span>
+                            {#if segment.isNarrator}
+                              <span class="narrator-badge">NARRATOR</span>
+                            {/if}
+                            <button 
+                              class="change-speaker-btn"
+                              on:click={() => {
+                                // Make this segment unmatched so user can reassign
+                                segment.isUnmatched = true;
+                                segment.speakerName = 'Unknown';
+                                allSegments = [...allSegments];
+                              }}
+                            >
+                              ✏️
+                            </button>
+                          </div>
+                        {/if}
+                      </div>
+                    </div>
+                  {/each}
+                </div>
+              </div>
+            {:else}
+              <!-- Original speakers view -->
+              {#each speakers as speaker}
               <div class="speaker-card">
                 <div class="speaker-header">
                   <div class="speaker-info">
@@ -2225,6 +2900,7 @@
                 </div>
               </div>
             {/each}
+            {/if}
           {/if}
         </div>
       {:else if mode === 'tts'}
@@ -2396,6 +3072,144 @@
                   </div>
                 {/if}
               </div>
+            </div>
+          {/if}
+        </div>
+      {:else if mode === 'build'}
+        <div class="build-container">
+          {#if loading}
+            <div class="loading-state">
+              <p>Loading build information...</p>
+            </div>
+          {:else if buildInfo}
+            <div class="build-info">
+              <div class="build-summary">
+                <h3>MP3 Build Status</h3>
+                
+                <div class="build-stats">
+                  <div class="stat-item">
+                    <div class="stat-label">MP3 Status:</div>
+                    <div class="stat-value {buildInfo.mp3Exists ? 'exists' : 'missing'}">
+                      {#if buildInfo.mp3Exists}
+                        ✅ Exists ({buildInfo.audioFile})
+                      {:else}
+                        ❌ Not Built
+                      {/if}
+                    </div>
+                  </div>
+                  
+                  <div class="stat-item">
+                    <div class="stat-label">Segments:</div>
+                    <div class="stat-value">
+                      {buildInfo.cachedSegments} / {buildInfo.totalSegments} cached
+                    </div>
+                  </div>
+                  
+                  {#if buildInfo.missingSegments > 0}
+                    <div class="stat-item">
+                      <div class="stat-label">Missing:</div>
+                      <div class="stat-value error">{buildInfo.missingSegments} segments</div>
+                    </div>
+                  {/if}
+                  
+                  {#if buildInfo.audioDuration}
+                    <div class="stat-item">
+                      <div class="stat-label">Duration:</div>
+                      <div class="stat-value">{Math.round(buildInfo.audioDuration)}s</div>
+                    </div>
+                  {/if}
+                  
+                  {#if buildInfo.audioFileSize}
+                    <div class="stat-item">
+                      <div class="stat-label">File Size:</div>
+                      <div class="stat-value">{(buildInfo.audioFileSize / 1024 / 1024).toFixed(1)}MB</div>
+                    </div>
+                  {/if}
+                </div>
+                
+                <div class="build-actions">
+                  <button 
+                    class="primary-button"
+                    on:click={() => startBuild(false)}
+                    disabled={building || buildInfo.cachedSegments === 0}
+                  >
+                    {#if building}
+                      ⏳ Building...
+                    {:else}
+                      🔍 Debug Build (Dry Run)
+                    {/if}
+                  </button>
+                  
+                  <button 
+                    class="primary-button force-rebuild"
+                    on:click={() => startBuild(true)}
+                    disabled={building || buildInfo.cachedSegments === 0}
+                  >
+                    {#if building}
+                      ⏳ Building...
+                    {:else}
+                      🔨 Force Rebuild MP3
+                    {/if}
+                  </button>
+                </div>
+                
+                {#if buildInfo.cachedSegments === 0}
+                  <div class="warning-message">
+                    ⚠️ No cached segments available. Generate TTS audio first.
+                  </div>
+                {/if}
+              </div>
+              
+              {#if buildProgress}
+                <div class="build-progress">
+                  <h4>Build Progress</h4>
+                  <div class="progress-status {buildProgress.status}">
+                    {#if buildProgress.status === 'starting'}
+                      🔄 {buildProgress.message}
+                    {:else if buildProgress.status === 'syncing'}
+                      ☁️ {buildProgress.message}
+                    {:else if buildProgress.status === 'completed'}
+                      ✅ {buildProgress.message}
+                    {:else if buildProgress.status === 'error'}
+                      ❌ {buildProgress.message}
+                    {/if}
+                  </div>
+                </div>
+              {/if}
+              
+              {#if buildLogs.length > 0}
+                <div class="build-logs">
+                  <h4>Build Debug Output</h4>
+                  <div class="log-container">
+                    {#each buildLogs as log, i}
+                      <div class="log-line" class:highlight={log.includes('===') || log.includes('✅') || log.includes('❌')}>
+                        <span class="log-number">{i + 1}</span>
+                        <span class="log-text">{log}</span>
+                      </div>
+                    {/each}
+                  </div>
+                </div>
+              {/if}
+              
+              {#if buildInfo.segments.length > 0}
+                <div class="segment-list">
+                  <h4>Segment Files</h4>
+                  <div class="segment-grid">
+                    {#each buildInfo.segments as segment}
+                      <div class="segment-file" class:missing={!segment.exists}>
+                        <span class="segment-name">segment_{segment.index.toString().padStart(3, '0')}.mp3</span>
+                        <span class="segment-status">
+                          {#if segment.exists}
+                            ✅
+                          {:else}
+                            ❌
+                          {/if}
+                        </span>
+                      </div>
+                    {/each}
+                  </div>
+                </div>
+              {/if}
             </div>
           {/if}
         </div>
