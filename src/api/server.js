@@ -1391,8 +1391,15 @@ class APIServer {
       if (chapterData) {
         // Save to database
         await this.db.upsertChapter(chapterData);
+        this.log(`✅ Successfully loaded chapter: ${chapterData.title}`);
+        this.log(`📝 Content length: ${chapterData.content?.length || 0} characters`);
         
-        // Automatically start speaker identification
+        // Save raw data file BEFORE speaker identification
+        const dataFile = path.join(config.paths.data, `${chapterData.id}.json`);
+        await fs.writeFile(dataFile, JSON.stringify(chapterData, null, 2));
+        this.log(`💾 Saved data file: ${dataFile}`);
+        
+        // Automatically start speaker identification AFTER file is saved
         this.log(`🎭 Automatically starting speaker identification for loaded chapter...`);
         try {
           await this.processChapterSpeakerIdentification(chapterData.id);
@@ -1400,13 +1407,6 @@ class APIServer {
         } catch (error) {
           this.log(`⚠️ Speaker identification failed: ${error.message}`, 'warning');
         }
-        this.log(`✅ Successfully loaded chapter: ${chapterData.title}`);
-        this.log(`📝 Content length: ${chapterData.content?.length || 0} characters`);
-        
-        // Save raw data file
-        const dataFile = path.join(config.paths.data, `${chapterData.id}.json`);
-        await fs.writeFile(dataFile, JSON.stringify(chapterData, null, 2));
-        this.log(`💾 Saved data file: ${dataFile}`);
         
         return chapterData;
       } else {
@@ -1514,7 +1514,12 @@ class APIServer {
           this.log(`✅ Successfully scraped content for: ${chapterData.title}`);
           this.log(`📝 Content length: ${chapterData.content?.length || 0} characters`);
           
-          // Automatically start speaker identification
+          // Save raw data file BEFORE speaker identification
+          const dataFile = path.join(config.paths.data, `${chapterData.id}.json`);
+          await fs.writeFile(dataFile, JSON.stringify(chapterData, null, 2));
+          this.log(`💾 Saved data file: ${dataFile}`);
+          
+          // Automatically start speaker identification AFTER file is saved
           this.log(`🎭 Automatically starting speaker identification for found chapter...`);
           try {
             await this.processChapterSpeakerIdentification(chapterData.id);
@@ -1522,11 +1527,6 @@ class APIServer {
           } catch (error) {
             this.log(`⚠️ Speaker identification failed: ${error.message}`, 'warning');
           }
-          
-          // Save raw data file
-          const dataFile = path.join(config.paths.data, `${chapterData.id}.json`);
-          await fs.writeFile(dataFile, JSON.stringify(chapterData, null, 2));
-          this.log(`💾 Saved data file: ${dataFile}`);
           
           return chapterData;
         } else {

@@ -261,7 +261,8 @@ class MultiVoiceTTSWorker {
     try {
       // Use dynamic audio normalization with compression to avoid clipping
       // dynaudnorm applies dynamic normalization, compand adds gentle compression
-      const command = `ffmpeg -f concat -safe 0 -i "${concatFile}" -af "aresample=44100,aformat=sample_fmts=fltp:channel_layouts=mono,dynaudnorm=f=75:g=31:p=0.95,compand=0.3|0.3:1|1:-90/-60|-60/-40|-40/-30|-20/-20:6:0:-90:0.2" -c:a libmp3lame -b:a 128k "${outputPath}" -y`;
+      // Add pad=whole_dur=5 to ensure we don't cut off the end
+      const command = `ffmpeg -f concat -safe 0 -i "${concatFile}" -af "aresample=44100,aformat=sample_fmts=fltp:channel_layouts=mono,dynaudnorm=f=75:g=31:p=0.95,compand=0.3|0.3:1|1:-90/-60|-60/-40|-40/-30|-20/-20:6:0:-90:0.2,apad=whole_dur=5" -c:a libmp3lame -b:a 128k "${outputPath}" -y`;
       await execAsync(command);
     } finally {
       // Clean up concat file
