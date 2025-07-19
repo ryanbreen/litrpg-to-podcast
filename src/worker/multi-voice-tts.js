@@ -789,6 +789,42 @@ class MultiVoiceTTSWorker {
       debugOutput += `\n`;
     }
     
+    // Add "End of Chapter" announcement with 2-second pause before it
+    debugOutput += `=== END OF CHAPTER FILES ===\n`;
+    
+    // Create 2-second pause before "End of Chapter"
+    const endPauseFile = path.join(segmentsDir, `end_pause.mp3`);
+    debugOutput += `End pause file: ${path.basename(endPauseFile)}\n`;
+    try {
+      const endPauseStats = await fs.stat(endPauseFile);
+      debugOutput += `End pause status: EXISTS (${endPauseStats.size} bytes)\n`;
+      audioFiles.push(endPauseFile);
+    } catch {
+      debugOutput += `End pause status: MISSING - Creating 2000ms pause\n`;
+      await this.createSilence(2000, endPauseFile);
+      audioFiles.push(endPauseFile);
+    }
+    
+    // Use existing or generate "End of Chapter" audio
+    const endChapterFile = path.join(segmentsDir, `end_chapter.mp3`);
+    debugOutput += `End chapter file: ${path.basename(endChapterFile)}\n`;
+    try {
+      const endChapterStats = await fs.stat(endChapterFile);
+      debugOutput += `End chapter status: EXISTS (${endChapterStats.size} bytes)\n`;
+      audioFiles.push(endChapterFile);
+    } catch {
+      debugOutput += `End chapter status: MISSING - Generating...\n`;
+      // Find narrator voice from segments
+      const narratorSegment = segments.find(s => s.speaker_id === 'narrator' || s.speaker_name === 'narrator');
+      const narratorVoiceId = narratorSegment?.voice_id || 'nova';
+      const narratorVoice = await this.db.getVoice(narratorVoiceId) || 
+                          { id: 'nova', name: 'Nova (Narrator)', provider: 'openai', settings: {} };
+      await this.generateSpeechSegment('End of Chapter', narratorVoice, endChapterFile);
+      audioFiles.push(endChapterFile);
+    }
+    
+    debugOutput += `\n`;
+    
     // Test concatenation with verbose output
     debugOutput += `=== CONCATENATION TEST ===\n`;
     debugOutput += `Total files to merge: ${audioFiles.length}\n`;
