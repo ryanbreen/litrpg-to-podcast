@@ -259,7 +259,8 @@ class MultiVoiceTTSWorker {
     await fs.writeFile(concatFile, fileList);
 
     try {
-      const command = `ffmpeg -f concat -safe 0 -i "${concatFile}" -af "aresample=44100,aformat=sample_fmts=fltp:channel_layouts=mono,loudnorm=I=-16:TP=-1.5:LRA=11" -c:a libmp3lame -b:a 128k "${outputPath}" -y`;
+      // Use simple volume normalization instead of loudnorm to avoid clipping issues
+      const command = `ffmpeg -f concat -safe 0 -i "${concatFile}" -af "aresample=44100,aformat=sample_fmts=fltp:channel_layouts=mono,volume=0.9" -c:a libmp3lame -b:a 128k "${outputPath}" -y`;
       await execAsync(command);
     } finally {
       // Clean up concat file
