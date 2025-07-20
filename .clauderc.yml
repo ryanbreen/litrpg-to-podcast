@@ -1,0 +1,4 @@
+# .clauderc.yml
+onSave:
+  - npx prettier --write "{{file}}"
+
