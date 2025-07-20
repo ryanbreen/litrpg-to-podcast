@@ -15,6 +15,7 @@ src/ui/node_modules/
 public/
 db/chapters.db
 db/jobs.db
+*.db
 *.mp3
 *.wav
 
