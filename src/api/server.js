@@ -24,6 +24,7 @@ class APIServer {
     this.ttsWorker = new TTSWorker();
     this.speakerIdentifier = new SpeakerIdentifier();
     this.logClients = new Set();
+    this.rebuildProgress = {}; // Track rebuild progress by chapter ID
     this.setupWebSocket();
     this.setupRoutes();
     this.setupStaticFiles();
@@ -726,11 +727,29 @@ class APIServer {
         
         this.log(`🔄 Rebuilding chapter ${chapterId} from cached segments`);
         
+        // Store rebuild progress for streaming
+        this.rebuildProgress[chapterId] = {
+          status: 'starting',
+          phase: 'initializing',
+          message: 'Starting rebuild process...',
+          segments: [],
+          currentSegment: 0,
+          totalSegments: 0,
+          ffmpegOutput: [],
+          startTime: Date.now()
+        };
+        
         const worker = new MultiVoiceTTSWorker();
         worker.server = this;
+        worker.rebuildProgressCallback = (progress) => {
+          this.rebuildProgress[chapterId] = {
+            ...this.rebuildProgress[chapterId],
+            ...progress
+          };
+        };
         await worker.init();
         
-        const outputFile = await worker.rebuildChapter(chapterId);
+        const outputFile = await worker.rebuildChapterWithProgress(chapterId);
         await worker.close();
         
         // Publish only the rebuilt MP3 to S3
@@ -753,6 +772,17 @@ class APIServer {
         );
         this.log(`✓ Updated published timestamp for chapter ${chapterId}`);
         
+        // Mark rebuild as completed
+        if (this.rebuildProgress[chapterId]) {
+          this.rebuildProgress[chapterId] = {
+            ...this.rebuildProgress[chapterId],
+            status: 'completed',
+            phase: 'done',
+            message: 'Rebuild completed successfully',
+            endTime: Date.now()
+          };
+        }
+        
         return { 
           success: true, 
           message: `Chapter ${chapterId} rebuilt and published to S3`,
@@ -760,9 +790,46 @@ class APIServer {
         };
       } catch (error) {
         this.log(`Failed to rebuild chapter: ${error.message}`, 'error');
+        
+        // Mark rebuild as failed
+        if (this.rebuildProgress[chapterId]) {
+          this.rebuildProgress[chapterId] = {
+            ...this.rebuildProgress[chapterId],
+            status: 'failed',
+            phase: 'error',
+            message: error.message,
+            error: error.message,
+            endTime: Date.now()
+          };
+        }
+        
         reply.code(500);
         return { error: error.message };
       }
+    });
+
+    // Get rebuild progress
+    this.fastify.get('/api/chapters/:id/rebuild-progress', async (request, reply) => {
+      const chapterId = request.params.id;
+      const progress = this.rebuildProgress[chapterId];
+      
+      if (!progress) {
+        return {
+          status: 'idle',
+          message: 'No rebuild in progress'
+        };
+      }
+      
+      // Clean up completed rebuilds after 5 minutes
+      if (progress.status === 'completed' && Date.now() - progress.startTime > 5 * 60 * 1000) {
+        delete this.rebuildProgress[chapterId];
+        return {
+          status: 'idle',
+          message: 'No rebuild in progress'
+        };
+      }
+      
+      return progress;
     });
 
     // Debug merge chapter - shows detailed ffmpeg output for troubleshooting

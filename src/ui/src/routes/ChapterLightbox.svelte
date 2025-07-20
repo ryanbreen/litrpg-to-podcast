@@ -38,6 +38,8 @@
   let buildLogs = [];
   let building = false;
   let buildPollInterval = null;
+  let rebuildProgress = null;
+  let rebuildPollInterval = null;
   
   $: if (mode === 'edit') loadChapterText();
   $: if (mode === 'speakers') loadSpeakers();
@@ -59,6 +61,7 @@
   onDestroy(() => {
     stopVoicesPolling();
     stopSpeakerIdPolling();
+    stopRebuildPolling();
   });
   
   // Restart polling when mode changes
@@ -878,9 +881,79 @@
     }
   }
   
+  async function pollRebuildProgress() {
+    try {
+      const response = await fetch(`${API_URL}/api/chapters/${chapter.id}/rebuild-progress`);
+      
+      if (response.ok) {
+        const progress = await response.json();
+        rebuildProgress = progress;
+        
+        // Update streaming segments if available
+        if (progress.segments) {
+          streamingSegments = progress.segments;
+        }
+        
+        // Auto-scroll to show new content
+        if (progress.ffmpegOutput && progress.ffmpegOutput.length > 0) {
+          setTimeout(() => {
+            const outputDiv = document.querySelector('.ffmpeg-output');
+            if (outputDiv) {
+              outputDiv.scrollTop = outputDiv.scrollHeight;
+            }
+          }, 100);
+        }
+        
+        // Check if completed or failed
+        if (progress.status === 'completed' || progress.status === 'failed') {
+          stopRebuildPolling();
+          
+          if (progress.status === 'completed') {
+            building = false;
+            buildProgress = {
+              status: 'completed',
+              message: 'Rebuild completed successfully'
+            };
+            
+            // Reload build info
+            await loadBuildInfo();
+          } else if (progress.status === 'failed') {
+            building = false;
+            buildProgress = {
+              status: 'error',
+              message: progress.error || 'Rebuild failed'
+            };
+            error = progress.error || 'Rebuild failed';
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Failed to poll rebuild progress:', err);
+    }
+  }
+  
+  function startRebuildPolling() {
+    if (rebuildPollInterval) return;
+    
+    // Poll immediately
+    pollRebuildProgress();
+    
+    // Then poll every 500ms for smoother updates
+    rebuildPollInterval = setInterval(pollRebuildProgress, 500);
+  }
+  
+  function stopRebuildPolling() {
+    if (rebuildPollInterval) {
+      clearInterval(rebuildPollInterval);
+      rebuildPollInterval = null;
+    }
+  }
+  
   async function startBuild(forceRebuild = false) {
     building = true;
     buildLogs = [];
+    streamingSegments = [];
+    rebuildProgress = null;
     buildProgress = {
       status: 'starting',
       message: forceRebuild ? 'Force rebuilding chapter MP3...' : 'Building chapter MP3...'
@@ -898,6 +971,11 @@
       });
       
       if (!response.ok) throw new Error('Failed to start build');
+      
+      // Start polling for progress if rebuilding
+      if (forceRebuild) {
+        startRebuildPolling();
+      }
       
       const result = await response.json();
       
@@ -2424,6 +2502,141 @@
     color: #721c24;
   }
   
+  .rebuild-progress {
+    background: #f0f4f8;
+    border: 1px solid #d1d9e6;
+    border-radius: 8px;
+    padding: 1.5rem;
+    margin-top: 1rem;
+  }
+  
+  .rebuild-progress h4 {
+    margin-top: 0;
+    margin-bottom: 1rem;
+    color: #495057;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  
+  .progress-phase {
+    background: #e9ecef;
+    padding: 0.5rem 1rem;
+    border-radius: 4px;
+    margin-bottom: 0.75rem;
+    font-size: 0.9rem;
+  }
+  
+  .segment-counter {
+    margin-left: 0.5rem;
+    color: #6c757d;
+  }
+  
+  .progress-message {
+    padding: 0.5rem 0;
+    color: #495057;
+    font-style: italic;
+  }
+  
+  .segment-analysis {
+    margin-top: 1rem;
+    background: white;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    padding: 1rem;
+  }
+  
+  .segment-analysis h5 {
+    margin: 0 0 0.75rem 0;
+    font-size: 0.95rem;
+    color: #495057;
+  }
+  
+  .segment-list {
+    max-height: 400px;
+    overflow-y: auto;
+    font-size: 0.85rem;
+    padding-right: 0.5rem;
+  }
+  
+  .segment-info {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.25rem 0;
+    border-bottom: 1px solid #f0f0f0;
+  }
+  
+  .segment-info:last-child {
+    border-bottom: none;
+  }
+  
+  .segment-index {
+    font-weight: bold;
+    color: #6c757d;
+    min-width: 40px;
+  }
+  
+  .segment-speaker {
+    flex: 1;
+    color: #495057;
+  }
+  
+  .segment-duration {
+    color: #28a745;
+    font-family: monospace;
+    min-width: 60px;
+    text-align: right;
+  }
+  
+  .segment-size {
+    color: #17a2b8;
+    font-family: monospace;
+    min-width: 70px;
+    text-align: right;
+  }
+  
+  .ffmpeg-progress {
+    margin-top: 1rem;
+    background: #2d3748;
+    border: 1px solid #1a202c;
+    border-radius: 4px;
+    padding: 1rem;
+  }
+  
+  .ffmpeg-progress h5 {
+    margin: 0 0 0.75rem 0;
+    font-size: 0.95rem;
+    color: #e2e8f0;
+  }
+  
+  .ffmpeg-output {
+    background: #1a202c;
+    border-radius: 4px;
+    padding: 0.75rem;
+    max-height: 150px;
+    overflow-y: auto;
+    font-family: 'Courier New', monospace;
+    font-size: 0.85rem;
+    color: #a0aec0;
+  }
+  
+  .ffmpeg-line {
+    padding: 0.125rem 0;
+    white-space: pre-wrap;
+  }
+  
+  .rebuild-complete {
+    margin-top: 1rem;
+    padding: 0.75rem;
+    background: #d4edda;
+    border: 1px solid #c3e6cb;
+    border-radius: 4px;
+    color: #155724;
+    font-weight: 500;
+    text-align: center;
+  }
+  
   .build-logs {
     background: #f8f9fa;
     border: 1px solid #dee2e6;
@@ -3174,6 +3387,59 @@
                       ❌ {buildProgress.message}
                     {/if}
                   </div>
+                </div>
+              {/if}
+              
+              {#if rebuildProgress && rebuildProgress.status !== 'idle'}
+                <div class="rebuild-progress">
+                  <h4>🔍 Rebuild Debug Stream</h4>
+                  
+                  <div class="progress-phase">
+                    <strong>Phase:</strong> {rebuildProgress.phase}
+                    {#if rebuildProgress.currentSegment}
+                      <span class="segment-counter">
+                        ({rebuildProgress.currentSegment}/{rebuildProgress.totalSegments})
+                      </span>
+                    {/if}
+                  </div>
+                  
+                  <div class="progress-message">
+                    {rebuildProgress.message}
+                  </div>
+                  
+                  {#if rebuildProgress.segments && rebuildProgress.segments.length > 0}
+                    <div class="segment-analysis">
+                      <h5>📊 Segment Analysis</h5>
+                      <div class="segment-list">
+                        {#each rebuildProgress.segments as segment}
+                          <div class="segment-info">
+                            <span class="segment-index">#{segment.index + 1}</span>
+                            <span class="segment-speaker">{segment.speaker}</span>
+                            <span class="segment-duration">{segment.duration.toFixed(2)}s</span>
+                            <span class="segment-size">{(segment.size / 1024).toFixed(1)}KB</span>
+                          </div>
+                        {/each}
+                      </div>
+                    </div>
+                  {/if}
+                  
+                  {#if rebuildProgress.ffmpegOutput && rebuildProgress.ffmpegOutput.length > 0}
+                    <div class="ffmpeg-progress">
+                      <h5>🎬 FFmpeg Output</h5>
+                      <div class="ffmpeg-output">
+                        {#each rebuildProgress.ffmpegOutput as line}
+                          <div class="ffmpeg-line">{line}</div>
+                        {/each}
+                      </div>
+                    </div>
+                  {/if}
+                  
+                  {#if rebuildProgress.status === 'completed'}
+                    <div class="rebuild-complete">
+                      ✅ Total Duration: {rebuildProgress.totalDuration ? Math.round(rebuildProgress.totalDuration) + 's' : 'N/A'}
+                      | File Size: {rebuildProgress.fileSize ? (rebuildProgress.fileSize / 1024 / 1024).toFixed(1) + 'MB' : 'N/A'}
+                    </div>
+                  {/if}
                 </div>
               {/if}
               
