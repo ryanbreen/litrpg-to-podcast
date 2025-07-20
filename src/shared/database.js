@@ -14,6 +14,11 @@ class Database {
     const dbDir = path.dirname(config.database.path);
     await fs.mkdir(dbDir, { recursive: true });
 
+    // Log database initialization for debugging
+    console.log(`Initializing database at: ${config.database.path}`);
+    console.log(`Database directory: ${dbDir}`);
+    // Adding some extra whitespace for testing
+
     return new Promise((resolve, reject) => {
       this.db = new sqlite3.Database(config.database.path, (err) => {
         if (err) {
@@ -37,7 +42,7 @@ class Database {
         error_message TEXT,
         metadata TEXT
       )`,
-      
+
       `CREATE TABLE IF NOT EXISTS chapters (
         id TEXT PRIMARY KEY,
         title TEXT NOT NULL,
@@ -74,7 +79,7 @@ class Database {
         FOREIGN KEY (chapter_id) REFERENCES chapters(id) ON DELETE CASCADE,
         FOREIGN KEY (speaker_id) REFERENCES speakers(id)
       )`,
-      
+
       // Voice library management
       `CREATE TABLE IF NOT EXISTS voices (
         id TEXT PRIMARY KEY,
@@ -88,7 +93,7 @@ class Database {
         is_active BOOLEAN DEFAULT 1,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )`,
-      
+
       `CREATE TABLE IF NOT EXISTS voice_samples (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         voice_id TEXT NOT NULL,
@@ -97,7 +102,7 @@ class Database {
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (voice_id) REFERENCES voices(id) ON DELETE CASCADE
       )`,
-      
+
       `CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status)`,
       `CREATE INDEX IF NOT EXISTS idx_jobs_chapter_id ON jobs(chapter_id)`,
       `CREATE INDEX IF NOT EXISTS idx_chapters_processed ON chapters(processed_at)`,
@@ -105,39 +110,78 @@ class Database {
       `CREATE INDEX IF NOT EXISTS idx_chapter_segments_chapter ON chapter_segments(chapter_id)`,
       `CREATE UNIQUE INDEX IF NOT EXISTS idx_chapter_segments_order ON chapter_segments(chapter_id, segment_index)`,
       `CREATE INDEX IF NOT EXISTS idx_voices_provider ON voices(provider)`,
-      `CREATE INDEX IF NOT EXISTS idx_voices_type ON voices(type)`
+      `CREATE INDEX IF NOT EXISTS idx_voices_type ON voices(type)`,
     ];
 
     for (const sql of tables) {
       await this.run(sql);
     }
-    
+
     // Run migrations for existing databases
     await this.runMigrations();
-    
+
     // Insert default OpenAI voices if they don't exist
     const defaultVoices = [
-      { id: 'alloy', name: 'Alloy', provider: 'openai', type: 'preset', tags: 'neutral,balanced' },
-      { id: 'echo', name: 'Echo', provider: 'openai', type: 'preset', tags: 'male,warm' },
-      { id: 'fable', name: 'Fable', provider: 'openai', type: 'preset', tags: 'male,british' },
-      { id: 'onyx', name: 'Onyx', provider: 'openai', type: 'preset', tags: 'male,deep' },
-      { id: 'nova', name: 'Nova', provider: 'openai', type: 'preset', tags: 'female,energetic' },
-      { id: 'shimmer', name: 'Shimmer', provider: 'openai', type: 'preset', tags: 'female,soft' }
+      {
+        id: 'alloy',
+        name: 'Alloy',
+        provider: 'openai',
+        type: 'preset',
+        tags: 'neutral,balanced',
+      },
+      {
+        id: 'echo',
+        name: 'Echo',
+        provider: 'openai',
+        type: 'preset',
+        tags: 'male,warm',
+      },
+      {
+        id: 'fable',
+        name: 'Fable',
+        provider: 'openai',
+        type: 'preset',
+        tags: 'male,british',
+      },
+      {
+        id: 'onyx',
+        name: 'Onyx',
+        provider: 'openai',
+        type: 'preset',
+        tags: 'male,deep',
+      },
+      {
+        id: 'nova',
+        name: 'Nova',
+        provider: 'openai',
+        type: 'preset',
+        tags: 'female,energetic',
+      },
+      {
+        id: 'shimmer',
+        name: 'Shimmer',
+        provider: 'openai',
+        type: 'preset',
+        tags: 'female,soft',
+      },
     ];
-    
+
     for (const voice of defaultVoices) {
-      await this.run(`
+      await this.run(
+        `
         INSERT OR IGNORE INTO voices (id, name, provider, type, tags)
         VALUES (?, ?, ?, ?, ?)
-      `, [voice.id, voice.name, voice.provider, voice.type, voice.tags]);
+      `,
+        [voice.id, voice.name, voice.provider, voice.type, voice.tags]
+      );
     }
   }
 
   async runMigrations() {
     // Check if sound column exists in chapter_segments
     const tableInfo = await this.all(`PRAGMA table_info(chapter_segments)`);
-    const hasSoundColumn = tableInfo.some(col => col.name === 'sound');
-    
+    const hasSoundColumn = tableInfo.some((col) => col.name === 'sound');
+
     if (!hasSoundColumn) {
       console.log('Adding sound column to chapter_segments table...');
       await this.run(`ALTER TABLE chapter_segments ADD COLUMN sound TEXT`);
@@ -146,7 +190,7 @@ class Database {
 
   async run(sql, params = []) {
     return new Promise((resolve, reject) => {
-      this.db.run(sql, params, function(err) {
+      this.db.run(sql, params, function (err) {
         if (err) {
           reject(err);
         } else {
@@ -186,7 +230,7 @@ class Database {
       INSERT OR REPLACE INTO jobs (chapter_id, type, status, metadata, updated_at)
       VALUES (?, ?, 'pending', ?, CURRENT_TIMESTAMP)
     `;
-    
+
     return await this.run(sql, [chapterId, type, JSON.stringify(metadata)]);
   }
 
@@ -196,7 +240,7 @@ class Database {
       SET status = ?, error_message = ?, updated_at = CURRENT_TIMESTAMP
       WHERE chapter_id = ? AND type = ?
     `;
-    
+
     return await this.run(sql, [status, errorMessage, chapterId, type]);
   }
 
@@ -205,7 +249,7 @@ class Database {
       SELECT * FROM jobs 
       WHERE chapter_id = ? AND type = ?
     `;
-    
+
     const job = await this.get(sql, [chapterId, type]);
     if (job && job.metadata) {
       job.metadata = JSON.parse(job.metadata);
@@ -216,14 +260,14 @@ class Database {
   async getJobs(status = null) {
     let sql = `SELECT * FROM jobs ORDER BY created_at DESC`;
     let params = [];
-    
+
     if (status) {
       sql = `SELECT * FROM jobs WHERE status = ? ORDER BY created_at DESC`;
       params = [status];
     }
-    
+
     const jobs = await this.all(sql, params);
-    return jobs.map(job => {
+    return jobs.map((job) => {
       if (job.metadata) {
         job.metadata = JSON.parse(job.metadata);
       }
@@ -239,10 +283,14 @@ class Database {
         audio_duration, audio_file_size, processed_at, metadata
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
-    
-    const contentHash = chapterData.content ? 
-      (await import('crypto')).createHash('md5').update(chapterData.content).digest('hex') : null;
-    
+
+    const contentHash = chapterData.content
+      ? (await import('crypto'))
+          .createHash('md5')
+          .update(chapterData.content)
+          .digest('hex')
+      : null;
+
     return await this.run(sql, [
       chapterData.id,
       chapterData.title,
@@ -252,26 +300,26 @@ class Database {
       chapterData.audio?.duration || null,
       chapterData.audio?.fileSize || null,
       chapterData.audio?.processedAt || null,
-      JSON.stringify(chapterData)
+      JSON.stringify(chapterData),
     ]);
   }
 
   async getChapter(chapterId) {
     const sql = `SELECT * FROM chapters WHERE id = ?`;
     const chapter = await this.get(sql, [chapterId]);
-    
+
     if (chapter && chapter.metadata) {
       chapter.metadata = JSON.parse(chapter.metadata);
     }
-    
+
     return chapter;
   }
 
   async getChapters() {
     const sql = `SELECT * FROM chapters ORDER BY scraped_at DESC`;
     const chapters = await this.all(sql);
-    
-    return chapters.map(chapter => {
+
+    return chapters.map((chapter) => {
       if (chapter.metadata) {
         chapter.metadata = JSON.parse(chapter.metadata);
       }
@@ -285,7 +333,7 @@ class Database {
       SET listened_seconds = ?
       WHERE id = ?
     `;
-    
+
     return await this.run(sql, [seconds, chapterId]);
   }
 
@@ -293,11 +341,17 @@ class Database {
   async getStats() {
     const stats = await Promise.all([
       this.get(`SELECT COUNT(*) as total FROM chapters`),
-      this.get(`SELECT COUNT(*) as processed FROM chapters WHERE processed_at IS NOT NULL`),
+      this.get(
+        `SELECT COUNT(*) as processed FROM chapters WHERE processed_at IS NOT NULL`
+      ),
       this.get(`SELECT COUNT(*) as pending FROM jobs WHERE status = 'pending'`),
       this.get(`SELECT COUNT(*) as running FROM jobs WHERE status = 'running'`),
-      this.get(`SELECT SUM(audio_duration) as total_duration FROM chapters WHERE audio_duration IS NOT NULL`),
-      this.get(`SELECT SUM(audio_file_size) as total_size FROM chapters WHERE audio_file_size IS NOT NULL`)
+      this.get(
+        `SELECT SUM(audio_duration) as total_duration FROM chapters WHERE audio_duration IS NOT NULL`
+      ),
+      this.get(
+        `SELECT SUM(audio_file_size) as total_size FROM chapters WHERE audio_file_size IS NOT NULL`
+      ),
     ]);
 
     return {
@@ -306,7 +360,7 @@ class Database {
       pendingJobs: stats[2].pending,
       runningJobs: stats[3].running,
       totalDuration: stats[4].total_duration || 0,
-      totalSize: stats[5].total_size || 0
+      totalSize: stats[5].total_size || 0,
     };
   }
 
@@ -343,7 +397,9 @@ class Database {
     let speaker = await this.getSpeaker(name);
     if (!speaker) {
       const speakerId = await this.createSpeaker(name, isNarrator);
-      speaker = await this.get(`SELECT * FROM speakers WHERE id = ?`, [speakerId]);
+      speaker = await this.get(`SELECT * FROM speakers WHERE id = ?`, [
+        speakerId,
+      ]);
     }
     return speaker;
   }
@@ -351,33 +407,48 @@ class Database {
   // Chapter segments management
   async saveChapterSegments(chapterId, segments) {
     // Delete existing segments for this chapter
-    await this.run(`DELETE FROM chapter_segments WHERE chapter_id = ?`, [chapterId]);
-    
+    await this.run(`DELETE FROM chapter_segments WHERE chapter_id = ?`, [
+      chapterId,
+    ]);
+
     // Insert new segments
     for (let i = 0; i < segments.length; i++) {
       const segment = segments[i];
-      
+
       // Skip undefined segments (shouldn't happen, but just in case)
       if (!segment) {
-        console.error(`Warning: Undefined segment at index ${i} for chapter ${chapterId}`);
+        console.error(
+          `Warning: Undefined segment at index ${i} for chapter ${chapterId}`
+        );
         continue;
       }
-      
+
       // Map "unknown" speakers to "narrator"
       let speakerName = segment.speaker;
       if (speakerName === 'unknown') {
         speakerName = 'narrator';
       }
-      
+
       // AI Announcer is a special type of narrator
-      const isNarratorType = speakerName === 'narrator' || speakerName === 'ai_announcer';
-      const speaker = await this.getOrCreateSpeaker(speakerName, isNarratorType);
-      
+      const isNarratorType =
+        speakerName === 'narrator' || speakerName === 'ai_announcer';
+      const speaker = await this.getOrCreateSpeaker(
+        speakerName,
+        isNarratorType
+      );
+
       const sql = `
         INSERT INTO chapter_segments (chapter_id, segment_index, speaker_id, text, type, sound)
         VALUES (?, ?, ?, ?, ?, ?)
       `;
-      await this.run(sql, [chapterId, i, speaker.id, segment.text, segment.type || 'narration', segment.sound || null]);
+      await this.run(sql, [
+        chapterId,
+        i,
+        speaker.id,
+        segment.text,
+        segment.type || 'narration',
+        segment.sound || null,
+      ]);
     }
 
     // Mark chapter as having speakers identified
@@ -398,13 +469,30 @@ class Database {
     return await this.all(sql, [chapterId]);
   }
 
+  async updateSegmentSpeaker(chapterId, segmentIndex, speakerId) {
+    const sql = `
+      UPDATE chapter_segments 
+      SET speaker_id = ? 
+      WHERE chapter_id = ? AND segment_index = ?
+    `;
+    const result = await this.run(sql, [speakerId, chapterId, segmentIndex]);
+
+    if (result.changes === 0) {
+      throw new Error(
+        `No segment found at index ${segmentIndex} for chapter ${chapterId}`
+      );
+    }
+
+    return result;
+  }
+
   async mergeSpeakers(fromSpeakerId, toSpeakerId) {
     // Update all segments to use the target speaker
     await this.run(
       `UPDATE chapter_segments SET speaker_id = ? WHERE speaker_id = ?`,
       [toSpeakerId, fromSpeakerId]
     );
-    
+
     // Delete the source speaker
     await this.run(`DELETE FROM speakers WHERE id = ?`, [fromSpeakerId]);
   }
@@ -429,13 +517,13 @@ class Database {
       GROUP BY s.id
       ORDER BY chapter_count DESC, total_segments DESC
     `;
-    
+
     const results = await this.all(sql);
-    
-    return results.map(row => ({
+
+    return results.map((row) => ({
       ...row,
       chapter_ids: row.chapter_ids ? row.chapter_ids.split(',') : [],
-      chapter_titles: row.chapter_titles ? row.chapter_titles.split(',') : []
+      chapter_titles: row.chapter_titles ? row.chapter_titles.split(',') : [],
     }));
   }
 
@@ -447,20 +535,22 @@ class Database {
       WHERE cs.speaker_id = ? AND c.processed_at IS NOT NULL
       ORDER BY c.scraped_at DESC
     `;
-    
+
     return await this.all(sql, [speakerId]);
   }
-  
+
   async deleteSpeaker(speakerId, force = false) {
     if (force) {
       // Delete all segments for this speaker first
-      await this.run(`DELETE FROM chapter_segments WHERE speaker_id = ?`, [speakerId]);
+      await this.run(`DELETE FROM chapter_segments WHERE speaker_id = ?`, [
+        speakerId,
+      ]);
     }
-    
+
     // Delete the speaker
     await this.run(`DELETE FROM speakers WHERE id = ?`, [speakerId]);
   }
-  
+
   async getSpeakerSegmentCount(speakerId) {
     const result = await this.get(
       `SELECT COUNT(*) as count FROM chapter_segments WHERE speaker_id = ?`,
@@ -486,11 +576,10 @@ class Database {
 
   async createVoice(voiceData) {
     // First check if this voice ID already exists (soft-deleted)
-    const existingVoice = await this.get(
-      'SELECT * FROM voices WHERE id = ?', 
-      [voiceData.id]
-    );
-    
+    const existingVoice = await this.get('SELECT * FROM voices WHERE id = ?', [
+      voiceData.id,
+    ]);
+
     if (existingVoice) {
       // Voice exists but is soft-deleted, reactivate it with new data
       const sql = `
@@ -499,14 +588,14 @@ class Database {
             is_active = 1, created_at = CURRENT_TIMESTAMP
         WHERE id = ?
       `;
-      
+
       return await this.run(sql, [
         voiceData.name,
         voiceData.provider || 'custom',
         voiceData.type || 'custom',
         JSON.stringify(voiceData.settings || {}),
         voiceData.tags || '',
-        voiceData.id
+        voiceData.id,
       ]);
     } else {
       // Voice doesn't exist, create new one
@@ -514,14 +603,14 @@ class Database {
         INSERT INTO voices (id, name, provider, type, settings, tags)
         VALUES (?, ?, ?, ?, ?, ?)
       `;
-      
+
       return await this.run(sql, [
         voiceData.id,
         voiceData.name,
         voiceData.provider || 'custom',
         voiceData.type || 'custom',
         JSON.stringify(voiceData.settings || {}),
-        voiceData.tags || ''
+        voiceData.tags || '',
       ]);
     }
   }
@@ -529,7 +618,7 @@ class Database {
   async updateVoice(voiceId, updates) {
     const fields = [];
     const values = [];
-    
+
     if (updates.name !== undefined) {
       fields.push('name = ?');
       values.push(updates.name);
@@ -546,9 +635,9 @@ class Database {
       fields.push('preview_url = ?');
       values.push(updates.preview_url);
     }
-    
+
     values.push(voiceId);
-    
+
     const sql = `UPDATE voices SET ${fields.join(', ')} WHERE id = ?`;
     return await this.run(sql, values);
   }
