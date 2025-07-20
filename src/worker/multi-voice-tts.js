@@ -281,6 +281,125 @@ class MultiVoiceTTSWorker {
     return outputPath;
   }
 
+  async concatenateAudioWithProgress(inputFiles, outputPath) {
+    // Create concat file list
+    const concatFile = outputPath + '.concat.txt';
+    const fileList = inputFiles.map(file => `file '${path.resolve(file)}'`).join('\n');
+    await fs.writeFile(concatFile, fileList);
+    
+    // Log the last few files to help debug
+    this.log(`Concatenating ${inputFiles.length} files with progress tracking...`);
+    
+    try {
+      // Use spawn for better progress tracking
+      const { spawn } = await import('child_process');
+      
+      // First pass: concatenate with forced resampling
+      const tempFile = outputPath + '.temp.mp3';
+      
+      if (this.rebuildProgressCallback) {
+        this.rebuildProgressCallback({
+          ffmpegOutput: ['Starting first pass: concatenation...']
+        });
+      }
+      
+      await new Promise((resolve, reject) => {
+        const ffmpeg = spawn('ffmpeg', [
+          '-f', 'concat',
+          '-safe', '0',
+          '-i', concatFile,
+          '-ar', '44100',
+          '-ac', '1',
+          '-c:a', 'libmp3lame',
+          '-b:a', '128k',
+          '-progress', 'pipe:2',
+          tempFile,
+          '-y'
+        ]);
+        
+        ffmpeg.stderr.on('data', (data) => {
+          const output = data.toString();
+          const lines = output.split('\n').filter(line => line.trim());
+          
+          lines.forEach(line => {
+            // Parse progress info
+            if (line.includes('time=')) {
+              const timeMatch = line.match(/time=(\d+:\d+:\d+\.\d+)/);
+              if (timeMatch && this.rebuildProgressCallback) {
+                this.rebuildProgressCallback({
+                  ffmpegOutput: [`Pass 1: ${timeMatch[1]}`],
+                  currentTime: timeMatch[1]
+                });
+              }
+            }
+          });
+        });
+        
+        ffmpeg.on('close', (code) => {
+          if (code === 0) {
+            resolve();
+          } else {
+            reject(new Error(`FFmpeg failed with code ${code}`));
+          }
+        });
+      });
+      
+      // Second pass: apply loudnorm
+      if (this.rebuildProgressCallback) {
+        this.rebuildProgressCallback({
+          ffmpegOutput: ['Starting second pass: volume normalization...']
+        });
+      }
+      
+      await new Promise((resolve, reject) => {
+        const ffmpeg = spawn('ffmpeg', [
+          '-i', tempFile,
+          '-af', 'loudnorm=I=-16:TP=-1.5:LRA=11',
+          '-c:a', 'libmp3lame',
+          '-b:a', '128k',
+          '-progress', 'pipe:2',
+          outputPath,
+          '-y'
+        ]);
+        
+        ffmpeg.stderr.on('data', (data) => {
+          const output = data.toString();
+          const lines = output.split('\n').filter(line => line.trim());
+          
+          lines.forEach(line => {
+            // Parse progress info
+            if (line.includes('time=')) {
+              const timeMatch = line.match(/time=(\d+:\d+:\d+\.\d+)/);
+              if (timeMatch && this.rebuildProgressCallback) {
+                this.rebuildProgressCallback({
+                  ffmpegOutput: [`Pass 2: ${timeMatch[1]}`],
+                  currentTime: timeMatch[1]
+                });
+              }
+            }
+          });
+        });
+        
+        ffmpeg.on('close', (code) => {
+          if (code === 0) {
+            resolve();
+          } else {
+            reject(new Error(`FFmpeg failed with code ${code}`));
+          }
+        });
+      });
+      
+      // Clean up temp file
+      await fs.unlink(tempFile).catch(() => {});
+      
+      this.log(`✅ Audio concatenation complete`);
+      
+    } finally {
+      // Clean up concat file
+      await fs.unlink(concatFile).catch(() => {});
+    }
+  }
+
   async concatenateAudio(inputFiles, outputPath) {
     // Create concat file list
     const concatFile = outputPath + '.concat.txt';
@@ -762,6 +881,203 @@ class MultiVoiceTTSWorker {
     this.log(`✅ Rebuilt chapter ${chapterId}`);
     this.log(`   Duration: ${Math.round(durationSeconds)}s`);
     this.log(`   File size: ${(fileSize / 1024 / 1024).toFixed(1)}MB`);
+    
+    return outputFile;
+  }
+
+  async rebuildChapterWithProgress(chapterId) {
+    this.log(`🔄 Rebuilding chapter ${chapterId} with progress tracking...`);
+    
+    const segments = await this.db.getChapterSegments(chapterId);
+    if (segments.length === 0) {
+      throw new Error(`No segments found for chapter ${chapterId}`);
+    }
+    
+    const segmentsDir = path.join(config.paths.output, 'segments', chapterId.toString());
+    const outputFile = path.join(config.paths.output, `${chapterId}.mp3`);
+    
+    // Update progress
+    if (this.rebuildProgressCallback) {
+      this.rebuildProgressCallback({
+        status: 'analyzing',
+        phase: 'segments',
+        message: `Analyzing ${segments.length} segments...`,
+        totalSegments: segments.length,
+        segments: []
+      });
+    }
+    
+    // Build array of all audio files in order
+    const audioFiles = [];
+    const segmentDetails = [];
+    
+    for (let i = 0; i < segments.length; i++) {
+      const segmentFile = path.join(segmentsDir, `segment_${i.toString().padStart(3, '0')}.mp3`);
+      
+      // Update progress for current segment
+      if (this.rebuildProgressCallback) {
+        this.rebuildProgressCallback({
+          status: 'processing',
+          phase: 'analyzing_segments',
+          message: `Analyzing segment ${i + 1}/${segments.length}...`,
+          currentSegment: i + 1
+        });
+      }
+      
+      // Check if segment exists
+      try {
+        const stats = await fs.stat(segmentFile);
+        
+        // Get audio duration
+        const { stdout: durationOutput } = await execAsync(`ffprobe -v quiet -show_entries format=duration -of csv=p=0 "${segmentFile}"`);
+        const duration = parseFloat(durationOutput.trim());
+        
+        const segmentInfo = {
+          index: i,
+          file: path.basename(segmentFile),
+          size: stats.size,
+          duration: duration,
+          speaker: segments[i].speaker_name || 'Unknown',
+          text: segments[i].text.substring(0, 50) + '...'
+        };
+        
+        segmentDetails.push(segmentInfo);
+        audioFiles.push(segmentFile);
+        
+        // Update progress with segment details
+        if (this.rebuildProgressCallback) {
+          this.rebuildProgressCallback({
+            segments: [...segmentDetails],
+            newSegment: segmentInfo
+          });
+        }
+        
+      } catch {
+        throw new Error(`Missing segment file: ${path.basename(segmentFile)}. Generate segments first.`);
+      }
+      
+      // Add pause file if not last segment
+      if (i < segments.length - 1) {
+        const pauseFile = path.join(segmentsDir, `pause_${i.toString().padStart(3, '0')}.mp3`);
+        try {
+          await fs.access(pauseFile);
+          audioFiles.push(pauseFile);
+        } catch {
+          // Pause file missing, create it
+          const segment = segments[i];
+          const nextSegment = segments[i + 1];
+          let pauseDuration = 300;
+          
+          if (segment.speaker_id !== nextSegment.speaker_id) {
+            pauseDuration = 500;
+          }
+          
+          if (segment.type === 'dialogue' && nextSegment.type === 'narration') {
+            pauseDuration = 750;
+          }
+          
+          // Special pause for AI Announcer segments
+          if (segment.speaker_id === 'ai_announcer' || nextSegment.speaker_id === 'ai_announcer') {
+            pauseDuration = 1000;
+          }
+          
+          await this.createSilence(pauseDuration, pauseFile);
+          audioFiles.push(pauseFile);
+        }
+      }
+    }
+    
+    // Add "End of Chapter" announcement with 2-second pause before it
+    this.log('Adding end of chapter announcement...');
+    
+    if (this.rebuildProgressCallback) {
+      this.rebuildProgressCallback({
+        status: 'processing',
+        phase: 'end_chapter',
+        message: 'Adding end of chapter announcement...'
+      });
+    }
+    
+    // Create 2-second pause before "End of Chapter"
+    const endPauseFile = path.join(segmentsDir, `end_pause.mp3`);
+    try {
+      await fs.access(endPauseFile);
+    } catch {
+      await this.createSilence(2000, endPauseFile);
+    }
+    audioFiles.push(endPauseFile);
+    
+    // Use existing or generate "End of Chapter" audio
+    const endChapterFile = path.join(segmentsDir, `end_chapter.mp3`);
+    try {
+      await fs.access(endChapterFile);
+    } catch {
+      // Find narrator voice from segments
+      const narratorSegment = segments.find(s => s.speaker_id === 'narrator' || s.speaker_name === 'narrator');
+      const narratorVoiceId = narratorSegment?.voice_id || 'nova';
+      const narratorVoice = await this.db.getVoice(narratorVoiceId) || 
+                          { id: 'nova', name: 'Nova (Narrator)', provider: 'openai', settings: {} };
+      await this.generateSpeechSegment('End of Chapter', narratorVoice, endChapterFile);
+    }
+    audioFiles.push(endChapterFile);
+    
+    // Add 2-second pause after "End of Chapter"
+    const afterEndPauseFile = path.join(segmentsDir, `after_end_pause.mp3`);
+    try {
+      await fs.access(afterEndPauseFile);
+    } catch {
+      await this.createSilence(2000, afterEndPauseFile);
+    }
+    audioFiles.push(afterEndPauseFile);
+    
+    // Concatenate all audio files with progress tracking
+    this.log(`Concatenating ${audioFiles.length} audio files...`);
+    
+    if (this.rebuildProgressCallback) {
+      this.rebuildProgressCallback({
+        status: 'concatenating',
+        phase: 'ffmpeg',
+        message: `Concatenating ${audioFiles.length} audio files with ffmpeg...`,
+        ffmpegOutput: []
+      });
+    }
+    
+    await this.concatenateAudioWithProgress(audioFiles, outputFile);
+    
+    // Get audio duration and file size
+    if (this.rebuildProgressCallback) {
+      this.rebuildProgressCallback({
+        status: 'finalizing',
+        phase: 'analyzing_output',
+        message: 'Analyzing output file...'
+      });
+    }
+    
+    const { stdout } = await execAsync(`ffprobe -v quiet -show_entries format=duration -of csv=p=0 "${outputFile}"`);
+    const durationSeconds = parseFloat(stdout.trim());
+    
+    const stats = await fs.stat(outputFile);
+    const fileSize = stats.size;
+    
+    // Update database
+    await this.db.run(
+      `UPDATE chapters SET audio_duration = ?, audio_file_size = ?, processed_at = CURRENT_TIMESTAMP WHERE id = ?`,
+      [durationSeconds, fileSize, chapterId]
+    );
+    
+    this.log(`✅ Rebuilt chapter ${chapterId}`);
+    this.log(`   Duration: ${Math.round(durationSeconds)}s`);
+    this.log(`   File size: ${(fileSize / 1024 / 1024).toFixed(1)}MB`);
+    
+    if (this.rebuildProgressCallback) {
+      this.rebuildProgressCallback({
+        status: 'completed',
+        phase: 'done',
+        message: `Rebuilt chapter successfully - Duration: ${Math.round(durationSeconds)}s, Size: ${(fileSize / 1024 / 1024).toFixed(1)}MB`,
+        totalDuration: durationSeconds,
+        fileSize: fileSize
+      });
+    }
     
     return outputFile;
   }

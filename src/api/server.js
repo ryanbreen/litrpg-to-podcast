@@ -24,6 +24,7 @@ class APIServer {
     this.ttsWorker = new TTSWorker();
     this.speakerIdentifier = new SpeakerIdentifier();
     this.logClients = new Set();
+    this.rebuildProgress = {}; // Track rebuild progress by chapter ID
     this.setupWebSocket();
     this.setupRoutes();
     this.setupStaticFiles();
@@ -627,6 +628,54 @@ class APIServer {
       }
     });
 
+    // Update segment speaker assignment
+    this.fastify.put('/api/chapters/:id/segments/:index/speaker', async (request, reply) => {
+      try {
+        const chapterId = request.params.id;
+        const segmentIndex = parseInt(request.params.index);
+        const { speakerId } = request.body;
+        
+        if (!speakerId) {
+          reply.code(400);
+          return { error: 'speakerId is required' };
+        }
+        
+        this.log(`👤 Updating speaker for segment ${segmentIndex} in chapter ${chapterId} to speaker ${speakerId}`);
+        
+        // Update the speaker assignment in the database
+        await this.db.updateSegmentSpeaker(chapterId, segmentIndex, speakerId);
+        
+        // Delete the full chapter MP3 since a segment was updated
+        const chapterMp3Path = path.join(config.paths.output, `${chapterId}.mp3`);
+        try {
+          await fs.unlink(chapterMp3Path);
+          this.log(`🗑️ Deleted chapter MP3 for ${chapterId} after speaker update`);
+          
+          // Mark chapter as needing rebuild in database
+          await this.db.run(
+            `UPDATE chapters SET processed_at = NULL, audio_duration = NULL, audio_file_size = NULL WHERE id = ?`,
+            [chapterId]
+          );
+        } catch (err) {
+          // File might not exist, that's okay
+          this.log(`ℹ️ Chapter MP3 not found for deletion: ${err.message}`);
+        }
+        
+        return { 
+          success: true, 
+          message: `Segment ${segmentIndex} speaker updated to ${speakerId}`,
+          chapterId,
+          segmentIndex,
+          speakerId,
+          chapterMp3Deleted: true
+        };
+      } catch (error) {
+        this.log(`❌ Failed to update segment speaker: ${error.message}`, 'error');
+        reply.code(500);
+        return { error: error.message };
+      }
+    });
+
     // Regenerate a specific segment
     this.fastify.post('/api/chapters/:id/segments/:index/regenerate', async (request, reply) => {
       try {
@@ -642,10 +691,27 @@ class APIServer {
         const segmentFile = await worker.regenerateSegment(chapterId, segmentIndex);
         await worker.close();
         
+        // Delete the full chapter MP3 since a segment was regenerated
+        const chapterMp3Path = path.join(config.paths.output, `${chapterId}.mp3`);
+        try {
+          await fs.unlink(chapterMp3Path);
+          this.log(`🗑️ Deleted chapter MP3 for ${chapterId} after segment regeneration`);
+          
+          // Mark chapter as needing rebuild in database
+          await this.db.run(
+            `UPDATE chapters SET processed_at = NULL, audio_duration = NULL, audio_file_size = NULL WHERE id = ?`,
+            [chapterId]
+          );
+        } catch (err) {
+          // File might not exist, that's okay
+          this.log(`ℹ️ Chapter MP3 not found for deletion: ${err.message}`);
+        }
+        
         return { 
           success: true, 
-          message: `Segment ${segmentIndex} regenerated`,
-          file: segmentFile
+          message: `Segment ${segmentIndex} regenerated, chapter MP3 deleted`,
+          file: segmentFile,
+          chapterMp3Deleted: true
         };
       } catch (error) {
         this.log(`Failed to regenerate segment: ${error.message}`, 'error');
@@ -661,18 +727,61 @@ class APIServer {
         
         this.log(`🔄 Rebuilding chapter ${chapterId} from cached segments`);
         
+        // Store rebuild progress for streaming
+        this.rebuildProgress[chapterId] = {
+          status: 'starting',
+          phase: 'initializing',
+          message: 'Starting rebuild process...',
+          segments: [],
+          currentSegment: 0,
+          totalSegments: 0,
+          ffmpegOutput: [],
+          startTime: Date.now()
+        };
+        
         const worker = new MultiVoiceTTSWorker();
         worker.server = this;
+        worker.rebuildProgressCallback = (progress) => {
+          this.rebuildProgress[chapterId] = {
+            ...this.rebuildProgress[chapterId],
+            ...progress
+          };
+        };
         await worker.init();
         
-        const outputFile = await worker.rebuildChapter(chapterId);
+        const outputFile = await worker.rebuildChapterWithProgress(chapterId);
         await worker.close();
         
-        // Publish to S3 after rebuilding
+        // Publish only the rebuilt MP3 to S3
         this.log(`📤 Publishing rebuilt chapter ${chapterId} to S3...`);
         const s3Sync = new S3Sync();
-        await s3Sync.syncPodcastFiles();
-        this.log(`✅ Published rebuilt chapter ${chapterId} to S3`);
+        s3Sync.server = this; // Set server for logging
+        await s3Sync.init();
+        
+        // Upload only the rebuilt MP3 file
+        const mp3Filename = `${chapterId}.mp3`;
+        const localPath = path.join(config.paths.output, mp3Filename);
+        const s3Path = `${config.s3.prefix}audio/${mp3Filename}`;
+        
+        await s3Sync.copyFileToS3(localPath, s3Path);
+        
+        // Update published timestamp
+        await this.db.run(
+          'UPDATE chapters SET published_at = CURRENT_TIMESTAMP WHERE id = ?',
+          [chapterId]
+        );
+        this.log(`✓ Updated published timestamp for chapter ${chapterId}`);
+        
+        // Mark rebuild as completed
+        if (this.rebuildProgress[chapterId]) {
+          this.rebuildProgress[chapterId] = {
+            ...this.rebuildProgress[chapterId],
+            status: 'completed',
+            phase: 'done',
+            message: 'Rebuild completed successfully',
+            endTime: Date.now()
+          };
+        }
         
         return { 
           success: true, 
@@ -681,9 +790,46 @@ class APIServer {
         };
       } catch (error) {
         this.log(`Failed to rebuild chapter: ${error.message}`, 'error');
+        
+        // Mark rebuild as failed
+        if (this.rebuildProgress[chapterId]) {
+          this.rebuildProgress[chapterId] = {
+            ...this.rebuildProgress[chapterId],
+            status: 'failed',
+            phase: 'error',
+            message: error.message,
+            error: error.message,
+            endTime: Date.now()
+          };
+        }
+        
         reply.code(500);
         return { error: error.message };
       }
+    });
+
+    // Get rebuild progress
+    this.fastify.get('/api/chapters/:id/rebuild-progress', async (request, reply) => {
+      const chapterId = request.params.id;
+      const progress = this.rebuildProgress[chapterId];
+      
+      if (!progress) {
+        return {
+          status: 'idle',
+          message: 'No rebuild in progress'
+        };
+      }
+      
+      // Clean up completed rebuilds after 5 minutes
+      if (progress.status === 'completed' && Date.now() - progress.startTime > 5 * 60 * 1000) {
+        delete this.rebuildProgress[chapterId];
+        return {
+          status: 'idle',
+          message: 'No rebuild in progress'
+        };
+      }
+      
+      return progress;
     });
 
     // Debug merge chapter - shows detailed ffmpeg output for troubleshooting
