@@ -292,12 +292,33 @@
         return b.occurrences - a.occurrences;
       });
 
-      // Auto-start speaker identification if no segments exist
+      // Check if speaker identification is already in progress on the server
       if (segments.length === 0 && chapter.scrapedAt && !identifyingSpeakers) {
-        console.log(
-          'No segments found, auto-starting speaker identification...'
+        // First check if it's already running
+        const progressResponse = await fetch(
+          `${API_URL}/api/chapters/${chapter.id}/speaker-id-progress`
         );
-        await identifySpeakers();
+        if (progressResponse.ok) {
+          const progress = await progressResponse.json();
+          if (
+            progress.status === 'processing' ||
+            (progress.status !== 'not_started' &&
+              !progress.completed &&
+              !progress.error)
+          ) {
+            console.log(
+              'Speaker identification already in progress, starting polling...'
+            );
+            identifyingSpeakers = true;
+            speakerIdProgress = progress;
+            startSpeakerIdPolling();
+          } else if (progress.status === 'not_started') {
+            console.log(
+              'No segments found, auto-starting speaker identification...'
+            );
+            await identifySpeakers();
+          }
+        }
       }
     } catch (err) {
       error = err.message;
