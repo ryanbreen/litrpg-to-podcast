@@ -12,9 +12,13 @@
   let sortOrder = 'asc'; // 'asc' for oldest first (default), 'desc' for newest first
   // Testing prettier hook after Claude Code restart
   let loadingNext = false;
+  let bulkExtractCount = 10; // Default number of chapters to extract
+  let bulkExtracting = false;
+  let bulkExtractProgress = null;
   let showGenerationProgress = false;
   let generatingChapter = null;
   let pollInterval = null;
+  let chapterSpeakerInfo = {}; // Store speaker info for badges
 
   const API_URL = 'http://localhost:8383';
 
@@ -24,10 +28,78 @@
       chapters = data;
       sortChapters();
       loading = false;
+
+      // Load speaker info for chapters with speaker ID completed
+      await loadChapterSpeakerInfo();
     } catch (err) {
       error = err.message;
       loading = false;
     }
+  }
+
+  async function loadChapterSpeakerInfo() {
+    // Only load speaker info for chapters with speaker ID stage completed
+    const chaptersWithSpeakers = chapters.filter(
+      (chapter) => getStageStatus(chapter, 'speakers') === 'completed'
+    );
+
+    console.log(
+      `Loading speaker info for ${chaptersWithSpeakers.length} chapters`
+    );
+
+    for (const chapter of chaptersWithSpeakers) {
+      try {
+        // Fetch segments for this chapter
+        const segmentsResponse = await fetch(
+          `${API_URL}/api/chapters/${chapter.id}/segments`
+        );
+
+        if (segmentsResponse.ok) {
+          const segmentsData = await segmentsResponse.json();
+          const segments = segmentsData.segments || [];
+
+          // Get unique speakers and check voice assignments from segments
+          const speakerMap = new Map();
+          segments.forEach((segmentData) => {
+            const segment = segmentData.segment || segmentData;
+            if (segment.speaker_name && segment.speaker_name !== 'Unknown') {
+              if (!speakerMap.has(segment.speaker_name)) {
+                speakerMap.set(segment.speaker_name, {
+                  name: segment.speaker_name,
+                  voice_id: segment.voice_id,
+                });
+              }
+            }
+          });
+
+          // Find speakers without voice assignments
+          const speakersWithoutVoice = [];
+          speakerMap.forEach((speaker) => {
+            if (!speaker.voice_id) {
+              speakersWithoutVoice.push(speaker.name);
+            }
+          });
+
+          chapterSpeakerInfo[chapter.id] = {
+            totalSpeakers: speakerMap.size,
+            unassignedCount: speakersWithoutVoice.length,
+            unassignedSpeakers: speakersWithoutVoice,
+          };
+
+          console.log(
+            `Chapter ${chapter.id}: ${speakersWithoutVoice.length} unassigned speakers`
+          );
+        }
+      } catch (err) {
+        console.error(
+          `Failed to load speaker info for chapter ${chapter.id}:`,
+          err
+        );
+      }
+    }
+
+    // Trigger reactivity
+    chapterSpeakerInfo = chapterSpeakerInfo;
   }
 
   // Subscribe to chapters store for real-time updates
@@ -59,10 +131,11 @@
     lightboxMode = mode;
   }
 
-  function closeLightbox() {
+  async function closeLightbox() {
     selectedChapter = null;
     lightboxMode = null;
-    refreshChapters(); // Reload in case of changes
+    await refreshChapters(); // Reload in case of changes
+    await loadChapterSpeakerInfo(); // Reload speaker info
   }
 
   function getStageStatus(chapter, stage) {
@@ -203,6 +276,77 @@
     }
   }
 
+  async function bulkExtractChapters() {
+    if (bulkExtracting || bulkExtractCount < 1) return;
+
+    bulkExtracting = true;
+    bulkExtractProgress = {
+      total: bulkExtractCount,
+      current: 0,
+      succeeded: 0,
+      failed: 0,
+      chapters: [],
+    };
+
+    try {
+      for (let i = 0; i < bulkExtractCount; i++) {
+        bulkExtractProgress.current = i + 1;
+
+        try {
+          const response = await fetch(`${API_URL}/api/chapters/load-next`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ waitForCompletion: true }),
+          });
+
+          const result = await response.json();
+
+          if (!response.ok || !result.success) {
+            bulkExtractProgress.failed++;
+            bulkExtractProgress.chapters.push({
+              index: i + 1,
+              status: 'failed',
+              error: result.error || 'Failed to load chapter',
+              chapterNumber: result.chapterNumber,
+            });
+            continue;
+          }
+
+          bulkExtractProgress.succeeded++;
+          bulkExtractProgress.chapters.push({
+            index: i + 1,
+            status: 'success',
+            chapterId: result.chapterId,
+            chapterNumber: result.chapterNumber,
+          });
+
+          // Delay between requests to avoid browser conflicts and server overload
+          if (i < bulkExtractCount - 1) {
+            await new Promise((resolve) => setTimeout(resolve, 5000)); // 5 second delay
+          }
+        } catch (err) {
+          bulkExtractProgress.failed++;
+          bulkExtractProgress.chapters.push({
+            index: i + 1,
+            status: 'failed',
+            error: err.message,
+          });
+        }
+      }
+
+      // Refresh chapters list after bulk extraction
+      await loadChapters();
+    } catch (err) {
+      error = `Bulk extraction failed: ${err.message}`;
+    } finally {
+      bulkExtracting = false;
+      // Keep progress visible for 5 seconds after completion
+      setTimeout(() => {
+        bulkExtractProgress = null;
+      }, 5000);
+    }
+  }
+
   async function deleteChapter(chapterId) {
     if (!confirm(`Are you sure you want to delete chapter ${chapterId}?`)) {
       return;
@@ -297,19 +441,88 @@
   {:else if chapters.length === 0}
     <div class="empty-state">
       <h2>No chapters found</h2>
-      <p>Click "Load Next Chapter" below to start adding chapters</p>
-      <div class="load-next-container">
-        <button
-          class="load-next-button"
-          on:click={loadNextChapter}
-          disabled={loadingNext}
-        >
-          {#if loadingNext}
-            ⏳ Searching for next chapter...
-          {:else}
-            📖 Load Next Chapter
-          {/if}
-        </button>
+      <p>Load chapters individually or in bulk to get started</p>
+
+      <!-- Load Chapter Controls -->
+      <div class="load-controls-container">
+        <div class="load-controls">
+          <!-- Single Chapter Load -->
+          <div class="single-load">
+            <button
+              class="load-next-button"
+              on:click={loadNextChapter}
+              disabled={loadingNext || bulkExtracting}
+            >
+              {#if loadingNext}
+                ⏳ Searching for next chapter...
+              {:else}
+                📖 Load Next Chapter
+              {/if}
+            </button>
+          </div>
+
+          <!-- Bulk Extract Controls -->
+          <div class="bulk-controls">
+            <div class="bulk-input-group">
+              <label for="bulk-count-empty">Bulk Extract:</label>
+              <input
+                id="bulk-count-empty"
+                type="number"
+                bind:value={bulkExtractCount}
+                min="1"
+                max="50"
+                disabled={bulkExtracting}
+              />
+              <button
+                class="bulk-extract-button"
+                on:click={bulkExtractChapters}
+                disabled={bulkExtracting || loadingNext}
+              >
+                {#if bulkExtracting}
+                  ⏳ Extracting {bulkExtractProgress?.current ||
+                    0}/{bulkExtractProgress?.total || bulkExtractCount}...
+                {:else}
+                  📚 Extract Chapters
+                {/if}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Bulk Extract Progress -->
+        {#if bulkExtractProgress}
+          <div class="bulk-progress">
+            <h4>Bulk Extraction Progress</h4>
+            <div class="progress-stats">
+              <span class="stat">
+                📊 Progress: {bulkExtractProgress.current}/{bulkExtractProgress.total}
+              </span>
+              <span class="stat success">
+                ✅ Succeeded: {bulkExtractProgress.succeeded}
+              </span>
+              <span class="stat error">
+                ❌ Failed: {bulkExtractProgress.failed}
+              </span>
+            </div>
+            {#if bulkExtractProgress.chapters.length > 0}
+              <div class="progress-details">
+                {#each bulkExtractProgress.chapters.slice(-5) as chapter}
+                  <div class="progress-item {chapter.status}">
+                    #{chapter.index}:
+                    {#if chapter.status === 'success'}
+                      ✅ Chapter {chapter.chapterNumber ||
+                        chapter.chapterId ||
+                        'loaded'}
+                    {:else}
+                      ❌ Chapter {chapter.chapterNumber || '?'}: {chapter.error ||
+                        'Failed'}
+                    {/if}
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        {/if}
       </div>
     </div>
   {:else}
@@ -355,7 +568,12 @@
                   <div
                     class="stage {getStageClass(
                       getStageStatus(chapter, 'speakers')
-                    )} {getStageClickability(chapter, 'speakers')}"
+                    )} {getStageClickability(
+                      chapter,
+                      'speakers'
+                    )} {chapterSpeakerInfo[chapter.id]?.unassignedCount > 0
+                      ? 'needs-action'
+                      : ''}"
                     on:click={() => {
                       if (canClickStage(chapter, 'speakers')) {
                         openLightbox(chapter, 'speakers');
@@ -363,7 +581,15 @@
                     }}
                   >
                     <div class="stage-icon">🎭</div>
-                    <div class="stage-name">Speaker ID</div>
+                    <div class="stage-name">
+                      Speaker ID
+                      {#if chapterSpeakerInfo[chapter.id]?.unassignedCount > 0}
+                        <span class="speaker-badge"
+                          >{chapterSpeakerInfo[chapter.id]
+                            .unassignedCount}</span
+                        >
+                      {/if}
+                    </div>
                     <div class="stage-status">
                       {getStageStatus(chapter, 'speakers')}
                     </div>
@@ -478,19 +704,86 @@
         </tbody>
       </table>
 
-      <!-- Load Next Chapter Button -->
-      <div class="load-next-container">
-        <button
-          class="load-next-button"
-          on:click={loadNextChapter}
-          disabled={loadingNext}
-        >
-          {#if loadingNext}
-            ⏳ Searching for next chapter...
-          {:else}
-            📖 Load Next Chapter
-          {/if}
-        </button>
+      <!-- Load Chapter Controls -->
+      <div class="load-controls-container">
+        <div class="load-controls">
+          <!-- Single Chapter Load -->
+          <div class="single-load">
+            <button
+              class="load-next-button"
+              on:click={loadNextChapter}
+              disabled={loadingNext || bulkExtracting}
+            >
+              {#if loadingNext}
+                ⏳ Searching for next chapter...
+              {:else}
+                📖 Load Next Chapter
+              {/if}
+            </button>
+          </div>
+
+          <!-- Bulk Extract Controls -->
+          <div class="bulk-controls">
+            <div class="bulk-input-group">
+              <label for="bulk-count">Bulk Extract:</label>
+              <input
+                id="bulk-count"
+                type="number"
+                bind:value={bulkExtractCount}
+                min="1"
+                max="50"
+                disabled={bulkExtracting}
+              />
+              <button
+                class="bulk-extract-button"
+                on:click={bulkExtractChapters}
+                disabled={bulkExtracting || loadingNext}
+              >
+                {#if bulkExtracting}
+                  ⏳ Extracting {bulkExtractProgress?.current ||
+                    0}/{bulkExtractProgress?.total || bulkExtractCount}...
+                {:else}
+                  📚 Extract Chapters
+                {/if}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Bulk Extract Progress -->
+        {#if bulkExtractProgress}
+          <div class="bulk-progress">
+            <h4>Bulk Extraction Progress</h4>
+            <div class="progress-stats">
+              <span class="stat">
+                📊 Progress: {bulkExtractProgress.current}/{bulkExtractProgress.total}
+              </span>
+              <span class="stat success">
+                ✅ Succeeded: {bulkExtractProgress.succeeded}
+              </span>
+              <span class="stat error">
+                ❌ Failed: {bulkExtractProgress.failed}
+              </span>
+            </div>
+            {#if bulkExtractProgress.chapters.length > 0}
+              <div class="progress-details">
+                {#each bulkExtractProgress.chapters.slice(-5) as chapter}
+                  <div class="progress-item {chapter.status}">
+                    #{chapter.index}:
+                    {#if chapter.status === 'success'}
+                      ✅ Chapter {chapter.chapterNumber ||
+                        chapter.chapterId ||
+                        'loaded'}
+                    {:else}
+                      ❌ Chapter {chapter.chapterNumber || '?'}: {chapter.error ||
+                        'Failed'}
+                    {/if}
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        {/if}
       </div>
     </div>
   {/if}
@@ -626,11 +919,25 @@
     font-size: 0.75rem;
     font-weight: 500;
     text-align: center;
+    position: relative;
   }
 
   .stage-status {
     font-size: 0.625rem;
     margin-top: 0.25rem;
+  }
+
+  .speaker-badge {
+    display: inline-block;
+    background: #ff6b6b;
+    color: white;
+    font-size: 0.7rem;
+    font-weight: bold;
+    padding: 0.1rem 0.4rem;
+    border-radius: 10px;
+    margin-left: 0.3rem;
+    vertical-align: super;
+    line-height: 1;
   }
 
   .stage-pending {
@@ -642,6 +949,12 @@
     background: #e8f5e9;
     color: #2e7d32;
     border-color: #4caf50;
+  }
+
+  .stage-completed.needs-action {
+    background: #fff3cd;
+    color: #856404;
+    border-color: #ffc107;
   }
 
   .stage-running {
@@ -733,11 +1046,122 @@
     background: #ffebee;
   }
 
-  .load-next-container {
+  .load-controls-container {
     padding: 2rem;
-    text-align: center;
     border-top: 1px solid #e0e0e0;
     background: #f9f9f9;
+  }
+
+  .load-controls {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 3rem;
+    flex-wrap: wrap;
+  }
+
+  .single-load {
+    display: flex;
+    align-items: center;
+  }
+
+  .bulk-controls {
+    display: flex;
+    align-items: center;
+  }
+
+  .bulk-input-group {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+  }
+
+  .bulk-input-group label {
+    font-weight: 600;
+    color: #333;
+  }
+
+  .bulk-input-group input[type='number'] {
+    width: 80px;
+    padding: 0.5rem;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 1rem;
+    text-align: center;
+  }
+
+  .bulk-extract-button {
+    padding: 0.75rem 1.5rem;
+    background: #2196f3;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-size: 1rem;
+    cursor: pointer;
+    transition: background 0.2s;
+    white-space: nowrap;
+  }
+
+  .bulk-extract-button:hover:not(:disabled) {
+    background: #1976d2;
+  }
+
+  .bulk-extract-button:disabled {
+    background: #ccc;
+    cursor: not-allowed;
+  }
+
+  .bulk-progress {
+    margin-top: 2rem;
+    padding: 1.5rem;
+    background: white;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+  }
+
+  .bulk-progress h4 {
+    margin: 0 0 1rem 0;
+    color: #333;
+  }
+
+  .progress-stats {
+    display: flex;
+    gap: 2rem;
+    margin-bottom: 1rem;
+    flex-wrap: wrap;
+  }
+
+  .stat {
+    font-weight: 500;
+  }
+
+  .stat.success {
+    color: #4caf50;
+  }
+
+  .stat.error {
+    color: #f44336;
+  }
+
+  .progress-details {
+    margin-top: 1rem;
+    padding: 1rem;
+    background: #f5f5f5;
+    border-radius: 4px;
+    font-family: monospace;
+    font-size: 0.9rem;
+  }
+
+  .progress-item {
+    padding: 0.25rem 0;
+  }
+
+  .progress-item.success {
+    color: #2e7d32;
+  }
+
+  .progress-item.failed {
+    color: #c62828;
   }
 
   .load-next-button {
