@@ -516,6 +516,19 @@ class APIServer {
 
           // Initialize progress tracking
           this.speakerIdProgress = this.speakerIdProgress || {};
+
+          // Check if already in progress
+          const existingProgress = this.speakerIdProgress[chapterId];
+          if (
+            existingProgress &&
+            !existingProgress.completed &&
+            !existingProgress.error
+          ) {
+            this.log(
+              `⚠️ Speaker ID already in progress for ${chapterId}, clearing old state`
+            );
+          }
+
           this.speakerIdProgress[chapterId] = {
             status: 'starting',
             phase: 'loading',
@@ -528,7 +541,22 @@ class APIServer {
           };
 
           // Process in background
-          this.processChapterSpeakerIdentification(chapterId);
+          this.log(
+            `🚀 Starting background speaker identification for ${chapterId}`
+          );
+          this.processChapterSpeakerIdentification(chapterId).catch((error) => {
+            this.log(
+              `❌ Background speaker ID failed: ${error.message}`,
+              'error'
+            );
+            this.speakerIdProgress[chapterId] = {
+              ...this.speakerIdProgress[chapterId],
+              status: 'failed',
+              phase: 'error',
+              error: error.message,
+              completed: false,
+            };
+          });
 
           return {
             success: true,
@@ -1953,12 +1981,17 @@ class APIServer {
   }
 
   async processChapterSpeakerIdentification(chapterId) {
+    // Initialize progress if not exists
+    if (!this.speakerIdProgress) {
+      this.speakerIdProgress = {};
+    }
+
     // Check if speaker identification is already in progress
     if (
-      this.speakerIdProgress &&
       this.speakerIdProgress[chapterId] &&
       !this.speakerIdProgress[chapterId].completed &&
-      !this.speakerIdProgress[chapterId].error
+      !this.speakerIdProgress[chapterId].error &&
+      this.speakerIdProgress[chapterId].status === 'processing'
     ) {
       this.log(
         `⚠️ Speaker identification already in progress for chapter ${chapterId}`
@@ -1987,8 +2020,27 @@ class APIServer {
 
       // Load chapter content
       const dataFile = path.join(config.paths.data, `${chapterId}.json`);
-      const data = await fs.readFile(dataFile, 'utf-8');
-      const chapterData = JSON.parse(data);
+      this.log(`📁 Loading data file: ${dataFile}`);
+
+      let data;
+      try {
+        data = await fs.readFile(dataFile, 'utf-8');
+        this.log(`✅ Read file successfully, length: ${data.length}`);
+      } catch (fileError) {
+        this.log(`❌ Failed to read file: ${fileError.message}`, 'error');
+        throw fileError;
+      }
+
+      let chapterData;
+      try {
+        chapterData = JSON.parse(data);
+        this.log(
+          `✅ Parsed JSON successfully, content length: ${chapterData.content?.length || 0}`
+        );
+      } catch (parseError) {
+        this.log(`❌ Failed to parse JSON: ${parseError.message}`, 'error');
+        throw parseError;
+      }
 
       if (!chapterData.content) {
         throw new Error('No content found for chapter');
@@ -2142,6 +2194,11 @@ class APIServer {
   async start() {
     try {
       await this.db.init();
+
+      // Ensure speaker identifier config is loaded
+      await this.speakerIdentifier.loadCharacterConfig();
+      this.speakerIdentifier.server = this;
+
       await this.fastify.listen({
         port: config.server.port,
         host: '0.0.0.0',

@@ -34,7 +34,7 @@ class PatreonScraper {
       this.browser = await chromium.launchPersistentContext(
         config.patreon.sessionDir,
         {
-          headless: true, // Run headless now that session is working
+          headless: false, // Non-headless mode for session debugging
           viewport: { width: 1280, height: 720 },
         }
       );

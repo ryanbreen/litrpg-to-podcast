@@ -1381,16 +1381,26 @@
                   📋 Segments View
                 </button>
               </div>
-              <button
-                class="primary-button"
-                on:click={markSpeakerIdComplete}
-                disabled={speakers.some((s) => !s.voiceId)}
-                title={speakers.some((s) => !s.voiceId)
-                  ? 'All speakers must have voices assigned before marking complete'
-                  : 'Mark speaker identification as complete'}
-              >
-                ✅ Mark Speaker ID Complete
-              </button>
+              <div class="action-buttons">
+                <button
+                  class="secondary-button"
+                  on:click={identifySpeakers}
+                  disabled={identifyingSpeakers}
+                  title="Re-run speaker identification"
+                >
+                  🔄 Re-identify Speakers
+                </button>
+                <button
+                  class="primary-button"
+                  on:click={markSpeakerIdComplete}
+                  disabled={speakers.some((s) => !s.voiceId)}
+                  title={speakers.some((s) => !s.voiceId)
+                    ? 'All speakers must have voices assigned before marking complete'
+                    : 'Mark speaker identification as complete'}
+                >
+                  ✅ Mark Speaker ID Complete
+                </button>
+              </div>
             </div>
 
             {#if speakerViewMode === 'segments'}
@@ -3378,6 +3388,12 @@
     margin-bottom: 1rem;
     flex-wrap: wrap;
     gap: 1rem;
+  }
+
+  .action-buttons {
+    display: flex;
+    gap: 1rem;
+    align-items: center;
   }
 
   .segments-view {

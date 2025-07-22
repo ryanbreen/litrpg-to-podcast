@@ -404,6 +404,101 @@ class Database {
     return speaker;
   }
 
+  // Merge segments containing special quoted names with adjacent narration
+  mergeSpecialQuotedSegments(segments) {
+    // Hard-coded special quoted names for now
+    const specialQuotedNames = ['I'];
+
+    const merged = [];
+
+    for (let i = 0; i < segments.length; i++) {
+      const segment = segments[i];
+
+      // Check if this segment contains only a special quoted name
+      if (this.isSpecialQuotedSegment(segment, specialQuotedNames)) {
+        // Best case: merge with both previous AND next narration segments
+        if (
+          merged.length > 0 &&
+          merged[merged.length - 1].speaker === 'narrator' &&
+          merged[merged.length - 1].type === 'narration' &&
+          i + 1 < segments.length &&
+          segments[i + 1].speaker === 'narrator' &&
+          segments[i + 1].type === 'narration'
+        ) {
+          // Merge all three: previous + current + next
+          merged[merged.length - 1].text += segment.text + segments[i + 1].text;
+          i++; // Skip the next segment since we merged it
+          continue;
+        }
+
+        // Try to merge with previous narration segment only
+        if (
+          merged.length > 0 &&
+          merged[merged.length - 1].speaker === 'narrator' &&
+          merged[merged.length - 1].type === 'narration'
+        ) {
+          merged[merged.length - 1].text += segment.text;
+          continue;
+        }
+
+        // Try to merge with next narration segment only
+        if (
+          i + 1 < segments.length &&
+          segments[i + 1].speaker === 'narrator' &&
+          segments[i + 1].type === 'narration'
+        ) {
+          const nextSegment = segments[i + 1];
+          merged.push({
+            speaker: 'narrator',
+            text: segment.text + nextSegment.text,
+            type: 'narration',
+          });
+          i++; // Skip the next segment since we merged it
+          continue;
+        }
+
+        // If can't merge with adjacent narration, keep as narrator segment
+        merged.push({
+          speaker: 'narrator',
+          text: segment.text,
+          type: 'narration',
+        });
+      } else {
+        // Regular segment, add as-is
+        merged.push(segment);
+      }
+    }
+
+    return merged;
+  }
+
+  // Check if a segment contains only a special quoted name
+  isSpecialQuotedSegment(segment, specialQuotedNames) {
+    if (!segment) return false;
+
+    const wholeText = segment.text.trim();
+
+    // Check if the entire text is just a special quoted name
+    return specialQuotedNames.some((name) => {
+      // Build test strings with exact character codes
+      const openQuote34 = String.fromCharCode(34); // "
+      const closeQuote34 = String.fromCharCode(34); // "
+      const openQuote8220 = String.fromCharCode(8220); // "
+      const closeQuote8221 = String.fromCharCode(8221); // "
+
+      const tests = [
+        openQuote34 + name + closeQuote34, // Straight quotes
+        openQuote8220 + name + closeQuote8221, // Curly open/close
+        closeQuote8221 + name + closeQuote8221, // Both closing curly - ACTUAL CASE
+        openQuote8220 + name + openQuote8220, // Both opening curly
+        openQuote8220 + name + closeQuote34, // Mixed 1
+        openQuote34 + name + closeQuote8221, // Mixed 2
+      ];
+
+      return tests.some((test) => wholeText === test);
+    });
+  }
+
   // Chapter segments management
   async saveChapterSegments(chapterId, segments) {
     // Delete existing segments for this chapter
@@ -411,9 +506,12 @@ class Database {
       chapterId,
     ]);
 
+    // Post-process segments to merge special quoted names
+    const mergedSegments = this.mergeSpecialQuotedSegments(segments);
+
     // Insert new segments
-    for (let i = 0; i < segments.length; i++) {
-      const segment = segments[i];
+    for (let i = 0; i < mergedSegments.length; i++) {
+      const segment = mergedSegments[i];
 
       // Skip undefined segments (shouldn't happen, but just in case)
       if (!segment) {
