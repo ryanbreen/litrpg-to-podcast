@@ -1,11 +1,11 @@
-# Patreon-to-Audio
+# LitRPG-to-Podcast
 
-A comprehensive system that extracts Patreon posts and converts them into high-quality multi-voice podcast audio with automated RSS feed publishing.
+A comprehensive system that extracts LitRPG web fiction from multiple sources (Patreon, Royal Road) and converts them into high-quality multi-voice podcast audio with automated RSS feed publishing.
 
 ## Features
 
 - 🎭 **Multi-Voice TTS**: Automatic speaker identification and voice assignment using OpenAI TTS
-- 📝 **Patreon Integration**: Automated chapter extraction from Patreon posts
+- 📝 **Multi-Source Integration**: Automated chapter extraction from Patreon and Royal Road
 - 🎙️ **Segment Caching**: Permanent audio segment storage with individual regeneration capability
 - 📡 **RSS Publishing**: Apple Podcasts-compliant RSS feeds with S3 integration
 - 🖥️ **Web Interface**: Full-featured management dashboard built with SvelteKit
@@ -15,7 +15,7 @@ A comprehensive system that extracts Patreon posts and converts them into high-q
 
 ### 4-Stage Pipeline
 
-1. **Extract** - Scrape chapter text from Patreon using Playwright
+1. **Extract** - Scrape chapter text from Patreon or Royal Road using Playwright
 2. **Speaker ID** - Identify and assign voices to individual speakers 
 3. **Generate** - Create multi-voice TTS audio with segment caching
 4. **Publish** - Generate RSS feed and sync to S3 for podcast distribution
@@ -44,7 +44,7 @@ A comprehensive system that extracts Patreon posts and converts them into high-q
 1. Clone the repository:
 ```bash
 git clone <repository-url>
-cd patreon-to-audio
+cd litrpg-to-podcast
 ```
 
 2. Install dependencies:
@@ -63,7 +63,11 @@ cp .env.example .env
 # OpenAI Configuration
 OPENAI_API_KEY=your_openai_api_key
 
-# Patreon Configuration  
+# Content Source Configuration
+CONTENT_SOURCE=royalroad  # or 'patreon'
+START_FROM_CHAPTER=986    # starting chapter number
+
+# Patreon Configuration (if using Patreon source)
 PATREON_USERNAME=your_username
 PATREON_PASSWORD=your_password
 
@@ -100,7 +104,7 @@ The application will be available at:
 
 ### Basic Workflow
 
-1. **Load Chapters**: Use "Load Next Chapter" to extract new content from Patreon
+1. **Load Chapters**: Use "Load Next Chapter" to extract new content from configured source
 2. **Speaker Assignment**: Review and assign voices to identified speakers
 3. **Generate Audio**: Create TTS audio with automatic segment caching
 4. **Publish**: Generate RSS feed and sync to S3 for podcast distribution
@@ -131,7 +135,7 @@ The system generates Apple Podcasts-compliant RSS feeds with:
 ```
 src/
 ├── api/           # Fastify API server
-├── scraper/       # Patreon content extraction
+├── scraper/       # Multi-source content extraction (Patreon, Royal Road)
 ├── worker/        # TTS and audio processing
 ├── shared/        # Common utilities and configuration
 └── ui/           # SvelteKit web interface
@@ -144,7 +148,7 @@ db/              # SQLite database files
 ### Key Files
 
 - `src/api/server.js` - Main API server with WebSocket logging
-- `src/scraper/scraper.js` - Patreon scraping with Playwright
+- `src/scraper/scraper-factory.js` - Multi-source scraper factory (Patreon, Royal Road)
 - `src/worker/multi-voice-tts.js` - TTS generation and audio processing
 - `src/ui/` - SvelteKit web interface
 - `scripts/tmux-manager.sh` - Process management script
@@ -191,4 +195,4 @@ Use the Debug Merge functionality in the Generate tab to analyze FFmpeg output.
 
 ## Acknowledgments
 
-Built for converting serialized fiction into podcast format with high-quality multi-voice narration.
+Built for converting LitRPG and serialized web fiction into podcast format with high-quality multi-voice narration. Supports multiple content sources including Patreon and Royal Road.

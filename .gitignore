@@ -7,9 +7,8 @@ src/ui/node_modules/
 .env.local
 .env.production
 
-# Patreon session data
-.patreon-session/
-.patreon-session.bak/
+# Browser session data
+.patreon-session*
 
 # Generated audio and data files
 public/

@@ -9,7 +9,7 @@ import config from '../shared/config.js';
 import { Database } from '../shared/database.js';
 import { TTSWorker } from '../worker/tts-worker.js';
 import { MultiVoiceTTSWorker } from '../worker/multi-voice-tts.js';
-import { PatreonScraper } from '../scraper/scraper.js';
+import { ScraperFactory } from '../scraper/scraper-factory.js';
 import { RSSGenerator } from '../shared/rss-generator.js';
 import { S3Sync } from '../shared/s3-sync.js';
 import { SpeakerIdentifier } from '../shared/speaker-identifier.js';
@@ -377,23 +377,28 @@ class APIServer {
 
           // Find the highest chapter number we have
           const chapters = await this.db.getChapters();
-          if (chapters.length === 0) {
-            reply.code(400);
-            return {
-              error: 'No chapters found. This should start with Chapter 912.',
-            };
-          }
-
           let highestChapterNumber = 0;
-          chapters.forEach((chapter) => {
-            const match = chapter.title.match(/Chapter (\d+)/i);
-            if (match) {
-              const num = parseInt(match[1]);
-              if (num > highestChapterNumber) {
-                highestChapterNumber = num;
+
+          // If we have no chapters, or if we're switching to a new source with a higher start point,
+          // use the configured starting chapter
+          if (chapters.length === 0) {
+            highestChapterNumber = config.source.startFromChapter - 1;
+          } else {
+            chapters.forEach((chapter) => {
+              const match = chapter.title.match(/Chapter (\d+)/i);
+              if (match) {
+                const num = parseInt(match[1]);
+                if (num > highestChapterNumber) {
+                  highestChapterNumber = num;
+                }
               }
+            });
+
+            // If the configured start is higher than our highest chapter, jump to the configured start
+            if (config.source.startFromChapter > highestChapterNumber + 1) {
+              highestChapterNumber = config.source.startFromChapter - 1;
             }
-          });
+          }
 
           const nextChapterNumber = highestChapterNumber + 1;
           this.log(
@@ -1698,7 +1703,7 @@ class APIServer {
       console.log('Starting full rebuild...');
 
       // Scrape all chapters
-      const scraper = new PatreonScraper();
+      const scraper = ScraperFactory.createScraper();
       const chapters = await scraper.scrapeAll();
 
       // Update database with chapter data
@@ -1725,7 +1730,7 @@ class APIServer {
       this.log('Starting sync (Stage 1: Extract chapters)...');
 
       // Create scraper instance with server logging
-      const scraper = new PatreonScraper();
+      const scraper = ScraperFactory.createScraper();
       scraper.server = this; // Pass server instance for logging
 
       const newChapters = await scraper.scrapeAll(); // This already skips existing
@@ -1782,7 +1787,7 @@ class APIServer {
       this.log(`🔄 Loading next chapter: ${postId}`);
 
       // Create scraper instance with server logging
-      const scraper = new PatreonScraper();
+      const scraper = ScraperFactory.createScraper();
       scraper.server = this;
 
       // Scrape the specific post
@@ -1840,7 +1845,7 @@ class APIServer {
       );
 
       // Create scraper instance with server logging
-      const scraper = new PatreonScraper();
+      const scraper = ScraperFactory.createScraper();
       scraper.server = this;
 
       // Scrape the chapter content
@@ -1898,7 +1903,7 @@ class APIServer {
       this.log(`🔍 Searching for Chapter ${chapterNumber}...`);
 
       // Create scraper instance with server logging
-      scraper = new PatreonScraper();
+      scraper = ScraperFactory.createScraper();
       scraper.server = this;
 
       // Search for the chapter using the updated findNextChapter method
