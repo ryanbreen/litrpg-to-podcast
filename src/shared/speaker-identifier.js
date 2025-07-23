@@ -491,6 +491,9 @@ CRITICAL: Not all quoted text is dialogue! Watch for:
 - Sign/label text: signs that say "No Entry", labels reading "Danger", etc.
 - Single quoted words or short phrases in narration are usually NOT dialogue
 - Special named entities: Some beings have names that always appear in quotes (see SPECIAL QUOTED NAMES section)
+- Skill/ability descriptions: When characters recall skill descriptions or system messages
+- Written text being read: Books, letters, skill descriptions, system notifications
+- Internal thoughts or memories: Characters recalling words or descriptions
 
 Return JSON with this exact structure:
 {
@@ -573,6 +576,14 @@ Output:
 - Segment 1: narrator "Jake faced "I" in battle."
 - Segment 2: Jake ""You cannot defeat me," Jake said."
 
+Input: Recalling parts of the description, Jake felt confident. "Natural treasures can be swallowed... the item will still be refined but at a slower pace."
+Output:
+- Segment 1: narrator "Recalling parts of the description, Jake felt confident. "Natural treasures can be swallowed... the item will still be refined but at a slower pace.""
+
+Input: The skill description read: "Increases damage by 50% when health is below 30%."
+Output:
+- Segment 1: narrator "The skill description read: "Increases damage by 50% when health is below 30%.""
+
 IMPORTANT RULES:
 - Single words or short phrases in quotes within narration are usually emphasis, not dialogue
 - Look for attribution verbs (said, spoke, etc.) to identify actual dialogue
@@ -581,7 +592,8 @@ IMPORTANT RULES:
 - For unnamed speakers (the dwarf, the guard, etc.) use that descriptor as the speaker name
 - Character aliases should use the main character name
 - Types: "narration" (default), "dialogue", "thought" (for italicized internal monologue)
-- When in doubt about air quotes vs dialogue, check if there's an attribution verb`;
+- When in doubt about air quotes vs dialogue, check if there's an attribution verb
+- CRITICAL: The narrator can NEVER have dialogue segments! If you would assign dialogue to "narrator", use "unknown" instead`;
 
     try {
       const allSegments = [];
@@ -731,6 +743,14 @@ IMPORTANT RULES:
           }
           if (!segment.type) {
             segment.type = 'narration'; // Default type
+          }
+
+          // ENFORCE: Narrator can never have dialogue
+          if (segment.speaker === 'narrator' && segment.type === 'dialogue') {
+            this.log(
+              `⚠️ Fixed: Narrator incorrectly assigned dialogue, changing to "unknown": "${segment.text.substring(0, 50)}..."`
+            );
+            segment.speaker = 'unknown';
           }
 
           // Check if this should be AI Announcer
@@ -968,6 +988,14 @@ RULES:
         for (let j = 0; j < result.segments.length; j++) {
           const segment = result.segments[j];
           const originalIndex = i + j; // Calculate original position
+
+          // ENFORCE: Narrator can never have dialogue
+          if (segment.speaker === 'narrator' && segment.type === 'dialogue') {
+            this.log(
+              `⚠️ Fixed: Narrator incorrectly assigned dialogue, changing to "unknown": "${segment.text.substring(0, 50)}..."`
+            );
+            segment.speaker = 'unknown';
+          }
 
           // Check for AI announcer and sound effects
           if (
