@@ -47,13 +47,14 @@ class RoyalRoadScraper {
    */
   async navigateToStory() {
     const storyUrl = config.royalroad.storyUrl;
-    this.log(`📖 Navigating to story: ${storyUrl}`);
+    const currentUrl = this.page.url();
+    this.log(`📖 Navigating to story: ${storyUrl} (from ${currentUrl})`);
 
     await this.page.goto(storyUrl, {
       waitUntil: 'networkidle',
       timeout: 60000, // 60 second timeout
     });
-    this.log('✅ Story page loaded');
+    this.log('✅ Story page loaded - ready for chapter search');
   }
 
   /**
@@ -191,12 +192,21 @@ class RoyalRoadScraper {
 
   /**
    * Get the next chapter number to scrape (based on START_FROM_CHAPTER config)
+   * NOTE: This method doesn't have database access, so it only handles single chapter extraction.
+   * For bulk extraction, use the API server's load-next-chapter endpoint which tracks progress.
    */
   getNextChapterNumber() {
     const startFrom = config.source.startFromChapter;
 
-    // For now, just return the start chapter
-    // TODO: Implement logic to track which chapters have been scraped
+    // This method is designed for single chapter extraction only
+    // For bulk operations, the API server should handle chapter tracking
+    this.log(
+      `⚠️  getNextChapterNumber() always returns startFromChapter: ${startFrom}`
+    );
+    this.log(
+      `⚠️  For bulk extraction, use repeated /api/chapters/load-next calls instead`
+    );
+
     return startFrom;
   }
 
@@ -221,11 +231,194 @@ class RoyalRoadScraper {
   }
 
   /**
-   * Compatibility method for Patreon workflow - scrape one chapter
+   * Compatibility method for Patreon workflow - scrape multiple chapters for bulk extraction
    */
   async scrapeAll() {
-    // For Royal Road, we only scrape one chapter at a time
-    return await this.sync();
+    this.log('🔄 Starting Royal Road bulk extraction...');
+
+    // If we don't have server access, fall back to single chapter mode
+    if (!this.server) {
+      this.log(
+        '⚠️  No server instance available, falling back to single chapter mode'
+      );
+      return await this.sync();
+    }
+
+    const newChapters = [];
+    const maxChapters = 10; // Limit bulk extraction to prevent infinite loops
+
+    try {
+      // Keep trying to load next chapters until we can't find any more
+      for (let i = 0; i < maxChapters; i++) {
+        try {
+          // Use the server's logic to find the next chapter number
+          const chapters = await this.server.db.getChapters();
+          let highestChapterNumber = 0;
+
+          if (chapters.length === 0) {
+            highestChapterNumber = config.source.startFromChapter - 1;
+          } else {
+            chapters.forEach((chapter) => {
+              const match = chapter.title.match(/Chapter (\d+)/i);
+              if (match) {
+                const num = parseInt(match[1]);
+                if (num > highestChapterNumber) {
+                  highestChapterNumber = num;
+                }
+              }
+            });
+
+            // If the configured start is higher than our highest chapter, jump to the configured start
+            if (config.source.startFromChapter > highestChapterNumber + 1) {
+              highestChapterNumber = config.source.startFromChapter - 1;
+            }
+          }
+
+          const nextChapterNumber = highestChapterNumber + 1;
+          this.log(
+            `🔍 Bulk extraction: Looking for chapter ${nextChapterNumber}...`
+          );
+
+          // Try to scrape this chapter (will navigate to story page first)
+          this.log(
+            `🔄 About to scrape chapter ${nextChapterNumber} - will navigate to story page first`
+          );
+          const result = await this.scrapeChapterByNumber(nextChapterNumber);
+
+          if (result && result.chapterData) {
+            newChapters.push(result.chapterData);
+            this.log(
+              `✅ Bulk extracted chapter ${nextChapterNumber}: ${result.chapterData.title}`
+            );
+
+            // Add to database immediately so next iteration sees it
+            await this.server.db.upsertChapter(result.chapterData);
+          } else {
+            this.log(
+              `❌ Chapter ${nextChapterNumber} not found, stopping bulk extraction`
+            );
+            break;
+          }
+        } catch (error) {
+          this.log(
+            `❌ Failed to extract chapter, stopping bulk extraction: ${error.message}`,
+            'error'
+          );
+          break;
+        }
+      }
+
+      if (newChapters.length === maxChapters) {
+        this.log(
+          `⚠️  Reached maximum bulk extraction limit of ${maxChapters} chapters`
+        );
+      }
+
+      this.log(
+        `🎯 Bulk extraction complete: Found ${newChapters.length} new chapters`
+      );
+      return newChapters;
+    } catch (error) {
+      this.log(`❌ Bulk extraction failed: ${error.message}`, 'error');
+      // Fall back to single chapter mode if bulk fails
+      return await this.sync();
+    }
+  }
+
+  /**
+   * Scrape chapters from Wayback Machine URLs
+   */
+  async scrapeWaybackChapters(waybackUrls) {
+    this.log(
+      `🕰️ Starting Wayback Machine extraction for ${waybackUrls.length} chapters...`
+    );
+
+    const chapters = [];
+
+    for (let i = 0; i < waybackUrls.length; i++) {
+      const url = waybackUrls[i];
+      try {
+        this.log(
+          `📚 Extracting chapter ${i + 1}/${waybackUrls.length} from Wayback Machine...`
+        );
+
+        // Navigate to the Wayback Machine URL
+        await this.page.goto(url, {
+          waitUntil: 'domcontentloaded', // Less strict wait condition for Wayback Machine
+          timeout: 60000,
+        });
+
+        // Extract the chapter number from the URL
+        const chapterMatch = url.match(/chapter-(\d+)-/);
+        const chapterNumber = chapterMatch
+          ? parseInt(chapterMatch[1])
+          : 971 + i;
+
+        // Extract the title from the page (same logic as regular Royal Road)
+        const titleElement = this.page.locator('div.fic-header h1');
+        const pageTitle = await titleElement.textContent().catch(() => null);
+
+        // Extract chapter title from URL as fallback
+        const urlTitleMatch = url.match(/chapter-\d+-(.*?)$/);
+        const urlTitle = urlTitleMatch
+          ? urlTitleMatch[1]
+              .replace(/-/g, ' ')
+              .replace(/\b\w/g, (l) => l.toUpperCase())
+          : `Chapter ${chapterNumber}`;
+
+        const title = pageTitle || `Chapter ${chapterNumber} - ${urlTitle}`;
+
+        // Extract the chapter content (same logic as regular Royal Road)
+        const contentElement = this.page.locator(
+          'div.chapter-inner.chapter-content'
+        );
+        const content = await contentElement.textContent();
+
+        if (!content || content.trim().length === 0) {
+          throw new Error(
+            `No content found for chapter ${chapterNumber} in Wayback Machine`
+          );
+        }
+
+        // Generate chapter data (use chapter_ prefix for consistency)
+        const chapterId = `chapter_${chapterNumber}`;
+
+        const chapterData = {
+          id: chapterId,
+          title: title.trim(),
+          url: url,
+          content: content.trim(),
+          wordCount: content.trim().split(/\s+/).length,
+          scrapedAt: new Date().toISOString(),
+          source: 'royalroad-wayback',
+          chapterNumber: chapterNumber,
+        };
+
+        // Save the data
+        await this.saveChapterData(chapterData);
+
+        chapters.push(chapterData);
+        this.log(
+          `✅ Extracted chapter ${chapterNumber}: ${chapterData.title} (${chapterData.wordCount} words)`
+        );
+
+        // Brief pause between requests to be respectful to Wayback Machine
+        if (i < waybackUrls.length - 1) {
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+        }
+      } catch (error) {
+        this.log(
+          `❌ Failed to extract chapter from ${url}: ${error.message}`,
+          'error'
+        );
+        // Continue with next chapter instead of failing entirely
+      }
+    }
+
+    this.log(
+      `🕰️ Wayback Machine extraction complete: ${chapters.length} chapters extracted`
+    );
+    return chapters;
   }
 
   /**

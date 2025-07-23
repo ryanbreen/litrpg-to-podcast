@@ -911,14 +911,14 @@ RULES:
       // Pre-allocate array with correct size to maintain order
       const attributedSegments = new Array(mergedSegments.length);
       const batchSize = 20; // Process segments in batches
+      const parallelBatches = 2; // Process 2 batches in parallel to respect OpenAI rate limits
 
-      for (let i = 0; i < mergedSegments.length; i += batchSize) {
+      // Create batch processing function
+      const processBatch = async (i, batchIndex, totalBatches) => {
         const batch = mergedSegments.slice(
           i,
           Math.min(i + batchSize, mergedSegments.length)
         );
-        const batchIndex = Math.floor(i / batchSize) + 1;
-        const totalBatches = Math.ceil(mergedSegments.length / batchSize);
 
         if (progressCallback) {
           progressCallback({
@@ -1015,10 +1015,38 @@ RULES:
           // Place segment in correct position
           attributedSegments[originalIndex] = segment;
         }
+      };
 
-        // Brief pause between batches
-        if (i + batchSize < mergedSegments.length) {
-          await new Promise((resolve) => setTimeout(resolve, 100));
+      // Process batches in parallel (limited to parallelBatches at a time)
+      const totalBatches = Math.ceil(mergedSegments.length / batchSize);
+      const batchPromises = [];
+
+      for (
+        let i = 0;
+        i < mergedSegments.length;
+        i += batchSize * parallelBatches
+      ) {
+        const currentBatchGroup = [];
+
+        // Create up to parallelBatches batches in this group
+        for (
+          let j = 0;
+          j < parallelBatches && i + j * batchSize < mergedSegments.length;
+          j++
+        ) {
+          const batchStart = i + j * batchSize;
+          const batchIndex = Math.floor(batchStart / batchSize) + 1;
+          currentBatchGroup.push(
+            processBatch(batchStart, batchIndex, totalBatches)
+          );
+        }
+
+        // Wait for this group of parallel batches to complete before starting the next group
+        await Promise.all(currentBatchGroup);
+
+        // Brief pause between batch groups to be respectful to OpenAI API
+        if (i + batchSize * parallelBatches < mergedSegments.length) {
+          await new Promise((resolve) => setTimeout(resolve, 200));
         }
       }
 

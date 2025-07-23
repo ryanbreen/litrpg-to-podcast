@@ -1727,49 +1727,82 @@ class APIServer {
 
   async processSyncJob() {
     try {
-      this.log('Starting sync (Stage 1: Extract chapters)...');
+      this.log(
+        'Starting sync (Stage 1: Extract chapters with parallel speaker identification)...'
+      );
 
       // Create scraper instance with server logging
       const scraper = ScraperFactory.createScraper();
       scraper.server = this; // Pass server instance for logging
 
-      const newChapters = await scraper.scrapeAll(); // This already skips existing
+      const newChapters = await scraper.scrapeAll(); // This already skips existing and adds to DB
 
       if (newChapters.length > 0) {
         this.log(`Found ${newChapters.length} new chapters to extract`);
 
-        // Update database - just extraction, no TTS
+        // For Royal Road, chapters are already in database from scraper.scrapeAll()
+        // For Patreon, we may need to add them (check if they're already there)
+        const chaptersToAdd = [];
         for (const chapter of newChapters) {
+          const existing = await this.db.getChapter(chapter.id);
+          if (!existing) {
+            chaptersToAdd.push(chapter);
+          }
+        }
+
+        // Add any chapters that weren't already added by the scraper
+        for (const chapter of chaptersToAdd) {
           await this.db.upsertChapter(chapter);
-          this.log(`✅ Extracted chapter ${chapter.id}: ${chapter.title}`);
+          this.log(`✅ Added chapter to database: ${chapter.id}`);
         }
 
         this.log(`Stage 1 complete: ${newChapters.length} chapters extracted`);
 
-        // Automatically start speaker identification for extracted chapters
+        // Start speaker identification in parallel for all extracted chapters
         this.log(
-          `🎭 Automatically starting Stage 2: Speaker identification for ${newChapters.length} chapters...`
+          `🎭 Starting Stage 2: Speaker identification for ${newChapters.length} chapters (parallel processing)...`
         );
-        let speakerIdSuccess = 0;
 
-        for (const chapter of newChapters) {
+        // Run speaker identification in parallel for all chapters
+        const speakerIdPromises = newChapters.map(async (chapter) => {
           try {
             await this.processChapterSpeakerIdentification(chapter.id);
-            speakerIdSuccess++;
             this.log(
               `✅ Speaker identification completed for: ${chapter.title}`
             );
+            return { success: true, chapter: chapter.title };
           } catch (error) {
             this.log(
               `⚠️ Speaker identification failed for ${chapter.title}: ${error.message}`,
               'warning'
             );
+            return {
+              success: false,
+              chapter: chapter.title,
+              error: error.message,
+            };
           }
-        }
+        });
+
+        // Wait for all speaker identification to complete
+        const speakerIdResults = await Promise.all(speakerIdPromises);
+        const speakerIdSuccess = speakerIdResults.filter(
+          (result) => result.success
+        ).length;
 
         this.log(
           `🎭 Stage 2 complete: ${speakerIdSuccess}/${newChapters.length} chapters processed`
         );
+
+        // Log any failures
+        const failures = speakerIdResults.filter((result) => !result.success);
+        if (failures.length > 0) {
+          this.log(`⚠️ Speaker identification failures:`);
+          failures.forEach((failure) => {
+            this.log(`  - ${failure.chapter}: ${failure.error}`);
+          });
+        }
+
         this.log(`Next steps:`);
         this.log(`  - Stage 3: Generate multi-voice TTS`);
         this.log(`  - Stage 4: Publish to S3`);
