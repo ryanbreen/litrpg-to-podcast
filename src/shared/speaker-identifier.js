@@ -149,7 +149,19 @@ export function splitDialogueNarration(passage, specialQuotedNames = []) {
     return textSegments;
   }
 
-  return segments.filter((s) => s.text.trim() !== '');
+  // Post-process segments to clean up formatting
+  return segments
+    .filter((s) => s.text.trim() !== '')
+    .map((s) => {
+      // For narration segments, trim trailing newlines while preserving internal structure
+      if (s.type === 'narration') {
+        return {
+          ...s,
+          text: s.text.replace(/\n+$/, ''), // Remove trailing newlines only
+        };
+      }
+      return s;
+    });
 }
 
 class SpeakerIdentifier {

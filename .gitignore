@@ -16,6 +16,8 @@ public/
 db/chapters.db
 db/jobs.db
 *.db
+*.sqlite
+*.sqlite3
 *.mp3
 *.wav
 

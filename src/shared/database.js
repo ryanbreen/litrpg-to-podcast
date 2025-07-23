@@ -535,6 +535,13 @@ class Database {
         isNarratorType
       );
 
+      // Clean up segment text - trim trailing newlines for narration
+      let cleanedText = segment.text;
+      if (segment.type === 'narration' || !segment.type) {
+        // Remove trailing newlines while preserving internal structure
+        cleanedText = segment.text.replace(/\n+$/, '');
+      }
+
       const sql = `
         INSERT INTO chapter_segments (chapter_id, segment_index, speaker_id, text, type, sound)
         VALUES (?, ?, ?, ?, ?, ?)
@@ -543,7 +550,7 @@ class Database {
         chapterId,
         i,
         speaker.id,
-        segment.text,
+        cleanedText,
         segment.type || 'narration',
         segment.sound || null,
       ]);
