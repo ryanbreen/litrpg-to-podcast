@@ -1,7 +1,7 @@
 {
-  "name": "patreon-to-podcast",
+  "name": "litrpg-to-podcast",
   "version": "1.0.0",
-  "description": "Convert Patreon posts to podcast audio with RSS feed",
+  "description": "Convert LitRPG web fiction to podcast audio with RSS feed from multiple sources",
   "main": "src/api/server.js",
   "type": "module",
   "scripts": {
@@ -52,11 +52,14 @@
     "node": ">=18.0.0"
   },
   "keywords": [
-    "patreon",
+    "litrpg",
     "podcast",
     "tts",
     "rss",
-    "audio"
+    "audio",
+    "patreon",
+    "royalroad",
+    "web-fiction"
   ],
   "author": "",
   "license": "MIT"
