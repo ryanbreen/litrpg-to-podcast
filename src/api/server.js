@@ -913,6 +913,14 @@ class APIServer {
         );
         this.log(`✓ Updated published timestamp for chapter ${chapterId}`);
 
+        // Update job statuses to reflect completion
+        // Create jobs if they don't exist (for chapters that were manually rebuilt)
+        await this.db.createJob(chapterId, 'tts');
+        await this.db.createJob(chapterId, 'publish');
+        await this.db.updateJobStatus(chapterId, 'tts', 'completed');
+        await this.db.updateJobStatus(chapterId, 'publish', 'completed');
+        this.log(`✓ Updated job statuses for chapter ${chapterId}`);
+
         // Mark rebuild as completed
         if (this.rebuildProgress[chapterId]) {
           this.rebuildProgress[chapterId] = {
@@ -931,6 +939,22 @@ class APIServer {
         };
       } catch (error) {
         this.log(`Failed to rebuild chapter: ${error.message}`, 'error');
+
+        // Update job statuses to reflect failure
+        await this.db.createJob(chapterId, 'tts');
+        await this.db.createJob(chapterId, 'publish');
+        await this.db.updateJobStatus(
+          chapterId,
+          'tts',
+          'failed',
+          error.message
+        );
+        await this.db.updateJobStatus(
+          chapterId,
+          'publish',
+          'failed',
+          'TTS generation failed'
+        );
 
         // Mark rebuild as failed
         if (this.rebuildProgress[chapterId]) {
