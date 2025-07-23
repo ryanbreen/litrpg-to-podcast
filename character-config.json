@@ -12,5 +12,14 @@
   },
   "pronunciations": {
     "lvl": "level"
+  },
+  "specialCases": {
+    "quotedNames": [
+      {
+        "name": "I",
+        "description": "A monster/being literally named 'I' that always appears in quotes",
+        "note": "Should be treated as part of regular narration or dialogue, not as a separate speaker"
+      }
+    ]
   }
 }
