@@ -564,17 +564,21 @@ class MultiVoiceTTSWorker {
         throw new Error(`Chapter ${chapterId} not found in database`);
       }
 
+      // Find the narrator from existing segments or use a default
+      const narratorSegment = segments.find(
+        (s) => s.speaker_id === 'narrator' || s.speaker_name === 'Narrator'
+      );
+
       // Add chapter title as the first segment (narrator voice)
       const titleSegment = {
         id: 0,
         chapter_id: chapterId,
         segment_index: -1, // Special index for title
-        speaker_id: 'narrator',
-        speaker_name: 'Narrator',
+        speaker_id: narratorSegment?.speaker_id || 'narrator',
+        speaker_name: narratorSegment?.speaker_name || 'Narrator',
         text: chapter.title,
         type: 'narration',
-        voice_id:
-          segments.find((s) => s.speaker_id === 'narrator')?.voice_id || null,
+        voice_id: narratorSegment?.voice_id || null,
       };
 
       // Prepend title segment to the segments array
@@ -594,7 +598,7 @@ class MultiVoiceTTSWorker {
       const speakerVoices = new Map();
       for (const segment of segmentsWithTitle) {
         if (!speakerVoices.has(segment.speaker_id)) {
-          // Special handling for AI Announcer
+          // Special handling for AI Announcer and Narrator
           if (segment.speaker_id === 'ai_announcer') {
             // Check if we have a custom AI Announcer voice configured
             let voice = await this.db.getVoiceForSpeaker('ai_announcer');
@@ -612,6 +616,37 @@ class MultiVoiceTTSWorker {
               ...voice,
               speaker_name: 'AI Announcer',
             });
+          } else if (
+            segment.speaker_id === 'narrator' ||
+            segment.speaker_name === 'Narrator'
+          ) {
+            // Special handling for narrator - check if we have a voice assigned
+            if (segment.voice_id) {
+              const voice = await this.db.getVoice(segment.voice_id);
+              if (voice) {
+                speakerVoices.set(segment.speaker_id, {
+                  ...voice,
+                  speaker_name: segment.speaker_name,
+                });
+              }
+            } else {
+              // Try to get narrator voice from database
+              let voice = await this.db.getVoiceForSpeaker('narrator');
+              if (!voice) {
+                // Default narrator voice
+                this.log(`📖 Using default Narrator voice (nova)`);
+                voice = {
+                  id: 'nova',
+                  name: 'Nova (Default Narrator)',
+                  provider: 'openai',
+                  settings: {},
+                };
+              }
+              speakerVoices.set(segment.speaker_id, {
+                ...voice,
+                speaker_name: 'Narrator',
+              });
+            }
           } else {
             // Check if speaker has a voice assigned
             if (!segment.voice_id) {
