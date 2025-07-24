@@ -558,11 +558,33 @@ class MultiVoiceTTSWorker {
         );
       }
 
+      // Load chapter details to get the title
+      const chapter = await this.db.getChapter(chapterId);
+      if (!chapter) {
+        throw new Error(`Chapter ${chapterId} not found in database`);
+      }
+
+      // Add chapter title as the first segment (narrator voice)
+      const titleSegment = {
+        id: 0,
+        chapter_id: chapterId,
+        segment_index: -1, // Special index for title
+        speaker_id: 'narrator',
+        speaker_name: 'Narrator',
+        text: chapter.title,
+        type: 'narration',
+        voice_id:
+          segments.find((s) => s.speaker_id === 'narrator')?.voice_id || null,
+      };
+
+      // Prepend title segment to the segments array
+      const segmentsWithTitle = [titleSegment, ...segments];
+
       // Initialize progress with segment data
       this.updateProgress(chapterId, {
         status: 'generating',
-        totalSegments: segments.length,
-        segments: segments.map((seg, index) => ({
+        totalSegments: segmentsWithTitle.length,
+        segments: segmentsWithTitle.map((seg, index) => ({
           text: seg.text,
           status: 'pending',
         })),
@@ -570,7 +592,7 @@ class MultiVoiceTTSWorker {
 
       // Load voices for all speakers
       const speakerVoices = new Map();
-      for (const segment of segments) {
+      for (const segment of segmentsWithTitle) {
         if (!speakerVoices.has(segment.speaker_id)) {
           // Special handling for AI Announcer
           if (segment.speaker_id === 'ai_announcer') {
@@ -615,7 +637,7 @@ class MultiVoiceTTSWorker {
       }
 
       this.log(
-        `Processing chapter with ${segments.length} segments and ${speakerVoices.size} unique speakers`
+        `Processing chapter with ${segmentsWithTitle.length} segments and ${speakerVoices.size} unique speakers`
       );
 
       // Create permanent directory for segments (not temporary)
@@ -631,14 +653,14 @@ class MultiVoiceTTSWorker {
         let lastSpeakerId = null;
 
         // Generate speech for each segment
-        for (let i = 0; i < segments.length; i++) {
-          const segment = segments[i];
+        for (let i = 0; i < segmentsWithTitle.length; i++) {
+          const segment = segmentsWithTitle[i];
           const voice = speakerVoices.get(segment.speaker_id);
 
           // Update progress - mark current segment as processing
           this.updateProgress(chapterId, {
             currentSegment: i,
-            segments: segments.map((seg, index) => ({
+            segments: segmentsWithTitle.map((seg, index) => ({
               text: seg.text,
               status:
                 index < i
@@ -650,7 +672,7 @@ class MultiVoiceTTSWorker {
           });
 
           this.log(
-            `Segment ${i + 1}/${segments.length}: ${segment.speaker_name} (${segment.type})`
+            `Segment ${i + 1}/${segmentsWithTitle.length}: ${segment.speaker_name} (${segment.type})`
           );
 
           const segmentFile = path.join(
@@ -730,8 +752,8 @@ class MultiVoiceTTSWorker {
           audioFiles.push(segmentFile);
 
           // Add pause between segments if speaker changes or it's dialogue
-          if (i < segments.length - 1) {
-            const nextSegment = segments[i + 1];
+          if (i < segmentsWithTitle.length - 1) {
+            const nextSegment = segmentsWithTitle[i + 1];
             let pauseDuration = 300; // Default short pause
 
             // Longer pause for speaker changes
@@ -773,13 +795,13 @@ class MultiVoiceTTSWorker {
           // Update progress - mark current segment as completed
           this.updateProgress(chapterId, {
             currentSegment: i + 1,
-            segments: segments.map((seg, index) => ({
+            segments: segmentsWithTitle.map((seg, index) => ({
               text: seg.text,
               status: index <= i ? 'completed' : 'pending',
             })),
           });
 
-          this.log(`Completed segment ${i + 1}/${segments.length}`);
+          this.log(`Completed segment ${i + 1}/${segmentsWithTitle.length}`);
         }
 
         // Add "End of Chapter" announcement with 2-second pause before it
@@ -793,7 +815,7 @@ class MultiVoiceTTSWorker {
         // Generate "End of Chapter" audio
         const endChapterFile = path.join(segmentsDir, `end_chapter.mp3`);
         const narratorVoice = speakerVoices.get(
-          segments.find((s) => s.speaker_id === 'narrator')?.speaker_id
+          segmentsWithTitle.find((s) => s.speaker_id === 'narrator')?.speaker_id
         ) || {
           id: 'nova',
           name: 'Nova (Narrator)',
@@ -848,7 +870,7 @@ class MultiVoiceTTSWorker {
         // Mark generation as complete
         this.updateProgress(chapterId, {
           status: 'completed',
-          currentSegment: segments.length,
+          currentSegment: segmentsWithTitle.length,
           completed: true,
           duration: durationSeconds,
           fileSize: fileSize,
