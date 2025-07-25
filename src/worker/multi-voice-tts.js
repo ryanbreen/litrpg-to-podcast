@@ -564,25 +564,34 @@ class MultiVoiceTTSWorker {
         throw new Error(`Chapter ${chapterId} not found in database`);
       }
 
-      // Find the narrator from existing segments or use a default
+      // Find the narrator from existing segments
       const narratorSegment = segments.find(
-        (s) => s.speaker_id === 'narrator' || s.speaker_name === 'Narrator'
+        (s) => s.speaker_name === 'Narrator' || s.is_narrator === 1
       );
 
-      // Add chapter title as the first segment (narrator voice)
-      const titleSegment = {
-        id: 0,
-        chapter_id: chapterId,
-        segment_index: -1, // Special index for title
-        speaker_id: narratorSegment?.speaker_id || 'narrator',
-        speaker_name: narratorSegment?.speaker_name || 'Narrator',
-        text: chapter.title,
-        type: 'narration',
-        voice_id: narratorSegment?.voice_id || null,
-      };
+      // Only add title segment if we have a narrator in the chapter
+      let segmentsWithTitle = segments;
+      if (narratorSegment) {
+        // Add chapter title as the first segment using the actual narrator speaker
+        const titleSegment = {
+          id: 0,
+          chapter_id: chapterId,
+          segment_index: -1, // Special index for title
+          speaker_id: narratorSegment.speaker_id, // Use the actual numeric speaker_id
+          speaker_name: narratorSegment.speaker_name,
+          text: chapter.title,
+          type: 'narration',
+          voice_id: narratorSegment.voice_id,
+          voice_name: narratorSegment.voice_name,
+          is_narrator: narratorSegment.is_narrator,
+        };
 
-      // Prepend title segment to the segments array
-      const segmentsWithTitle = [titleSegment, ...segments];
+        // Prepend title segment to the segments array
+        segmentsWithTitle = [titleSegment, ...segments];
+      } else {
+        // No narrator found, skip title narration
+        this.log('⚠️ No narrator found in chapter, skipping title narration');
+      }
 
       // Initialize progress with segment data
       this.updateProgress(chapterId, {
@@ -616,37 +625,6 @@ class MultiVoiceTTSWorker {
               ...voice,
               speaker_name: 'AI Announcer',
             });
-          } else if (
-            segment.speaker_id === 'narrator' ||
-            segment.speaker_name === 'Narrator'
-          ) {
-            // Special handling for narrator - check if we have a voice assigned
-            if (segment.voice_id) {
-              const voice = await this.db.getVoice(segment.voice_id);
-              if (voice) {
-                speakerVoices.set(segment.speaker_id, {
-                  ...voice,
-                  speaker_name: segment.speaker_name,
-                });
-              }
-            } else {
-              // Try to get narrator voice from database
-              let voice = await this.db.getVoiceForSpeaker('narrator');
-              if (!voice) {
-                // Default narrator voice
-                this.log(`📖 Using default Narrator voice (nova)`);
-                voice = {
-                  id: 'nova',
-                  name: 'Nova (Default Narrator)',
-                  provider: 'openai',
-                  settings: {},
-                };
-              }
-              speakerVoices.set(segment.speaker_id, {
-                ...voice,
-                speaker_name: 'Narrator',
-              });
-            }
           } else {
             // Check if speaker has a voice assigned
             if (!segment.voice_id) {
@@ -1662,13 +1640,59 @@ class MultiVoiceTTSWorker {
       chapterId.toString()
     );
 
+    // Get chapter to check if we have a title segment
+    const chapter = await this.db.getChapter(chapterId);
+    const narratorSegment = segments.find(
+      (s) => s.speaker_name === 'Narrator' || s.is_narrator === 1
+    );
+
     // Check which segments exist on disk
     const segmentFiles = [];
 
+    // If we have a narrator, check for title segment (segment_000.mp3)
+    if (narratorSegment && chapter) {
+      const titleSegmentFile = path.join(segmentsDir, 'segment_000.mp3');
+      let titleExists = false;
+      let titleStats = null;
+
+      try {
+        titleStats = await fs.stat(titleSegmentFile);
+        titleExists = true;
+      } catch {
+        titleExists = false;
+      }
+
+      if (titleExists) {
+        // Add the title segment info
+        segmentFiles.push({
+          index: 0,
+          segment: {
+            id: 0,
+            chapter_id: chapterId,
+            segment_index: -1,
+            speaker_id: narratorSegment.speaker_id,
+            speaker_name: narratorSegment.speaker_name,
+            text: chapter.title,
+            type: 'narration',
+            voice_id: narratorSegment.voice_id,
+            voice_name: narratorSegment.voice_name,
+            is_narrator: narratorSegment.is_narrator,
+          },
+          file: titleSegmentFile,
+          exists: true,
+          size: titleStats ? titleStats.size : 0,
+          modifiedAt: titleStats ? titleStats.mtime : null,
+        });
+      }
+    }
+
+    // Add all regular segments (shifted by 1 if we have a title)
+    const hasTitle = segmentFiles.length > 0;
     for (let i = 0; i < segments.length; i++) {
+      const fileIndex = hasTitle ? i + 1 : i;
       const segmentFile = path.join(
         segmentsDir,
-        `segment_${i.toString().padStart(3, '0')}.mp3`
+        `segment_${fileIndex.toString().padStart(3, '0')}.mp3`
       );
       let exists = false;
       let stats = null;
@@ -1681,7 +1705,7 @@ class MultiVoiceTTSWorker {
       }
 
       segmentFiles.push({
-        index: i,
+        index: fileIndex,
         segment: segments[i],
         file: segmentFile,
         exists: exists,
