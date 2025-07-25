@@ -138,17 +138,25 @@ class RSSGenerator {
           audioUrl: `${config.server.siteUrl}/audio/${chapter.id}.mp3`,
           fileSize: chapter.audio_file_size,
           duration: chapter.audio_duration,
-          pubDate: new Date(
-            chapter.published_at || chapter.processed_at || chapter.scraped_at
-          ),
           chapterNumber: parseInt(
             chapter.title.match(/Chapter\s+(\d+)/i)?.[1] || '0'
+          ),
+          originalPubDate: new Date(
+            chapter.published_at || chapter.processed_at || chapter.scraped_at
           ),
         });
       }
 
       // Sort episodes by chapter number (ascending for chronological order)
       episodes.sort((a, b) => a.chapterNumber - b.chapterNumber);
+
+      // Calculate pubDates that maintain chapter order
+      // Start from a base date and increment by 1 hour for each chapter
+      const baseDate = new Date('2024-01-01T00:00:00Z'); // Arbitrary start date
+      episodes.forEach((episode, index) => {
+        // Each episode gets a pubDate 1 hour after the previous one
+        episode.pubDate = new Date(baseDate.getTime() + (index * 60 * 60 * 1000));
+      });
 
       // Add episodes to feed
       for (const episode of episodes) {
