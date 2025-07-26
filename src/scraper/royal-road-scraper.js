@@ -117,11 +117,26 @@ class RoyalRoadScraper {
     const contentElement = this.page.locator(
       'div.chapter-inner.chapter-content'
     );
-    const content = await contentElement.textContent();
+    let content = await contentElement.textContent();
 
     if (!content || content.trim().length === 0) {
       throw new Error(`No content found for chapter ${chapterInfo.number}`);
     }
+
+    // Filter out Royal Road piracy warning text
+    content = content.replace(
+      /This tale has been unlawfully lifted from Royal Road\. If you spot it on Amazon, please report it\./g,
+      ''
+    );
+
+    // Also filter out other common Royal Road warnings
+    content = content.replace(
+      /This story originates from Royal Road\. Ensure the author gets the support they deserve by reading it there\./g,
+      ''
+    );
+
+    // Clean up any extra whitespace left by removals
+    content = content.replace(/\n\s*\n\s*\n/g, '\n\n').trim();
 
     // Generate a unique ID based on chapter number (similar to Patreon post IDs)
     const chapterId = `rr_${chapterInfo.number}`;
