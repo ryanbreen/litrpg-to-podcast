@@ -8,12 +8,13 @@ import { Database } from '../shared/database.js';
 import { RSSGenerator } from '../shared/rss-generator.js';
 import { S3Sync } from '../shared/s3-sync.js';
 
-const execAsync = promisify(exec);
-
-// Custom exec with larger buffer for ffmpeg operations
-const execAsyncLarge = (command) => {
+// Custom exec with larger buffer for all operations
+const execAsync = (command, options = {}) => {
   return new Promise((resolve, reject) => {
-    exec(command, { maxBuffer: 50 * 1024 * 1024 }, (error, stdout, stderr) => {
+    const defaultOptions = { maxBuffer: 50 * 1024 * 1024 };
+    const finalOptions = { ...defaultOptions, ...options };
+
+    exec(command, finalOptions, (error, stdout, stderr) => {
       if (error) {
         reject(error);
       } else {
@@ -22,6 +23,9 @@ const execAsyncLarge = (command) => {
     });
   });
 };
+
+// Alias for backward compatibility
+const execAsyncLarge = execAsync;
 
 class MultiVoiceTTSWorker {
   constructor() {

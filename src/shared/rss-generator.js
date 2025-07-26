@@ -6,7 +6,21 @@ import { promisify } from 'util';
 import config from './config.js';
 import { Database } from './database.js';
 
-const execAsync = promisify(exec);
+// Custom exec with larger buffer for all operations
+const execAsync = (command, options = {}) => {
+  return new Promise((resolve, reject) => {
+    const defaultOptions = { maxBuffer: 50 * 1024 * 1024 };
+    const finalOptions = { ...defaultOptions, ...options };
+
+    exec(command, finalOptions, (error, stdout, stderr) => {
+      if (error) {
+        reject(error);
+      } else {
+        resolve({ stdout, stderr });
+      }
+    });
+  });
+};
 
 class RSSGenerator {
   constructor() {
@@ -155,7 +169,7 @@ class RSSGenerator {
       const baseDate = new Date('2024-01-01T00:00:00Z'); // Arbitrary start date
       episodes.forEach((episode, index) => {
         // Each episode gets a pubDate 1 hour after the previous one
-        episode.pubDate = new Date(baseDate.getTime() + (index * 60 * 60 * 1000));
+        episode.pubDate = new Date(baseDate.getTime() + index * 60 * 60 * 1000);
       });
 
       // Add episodes to feed
