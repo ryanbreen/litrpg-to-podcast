@@ -151,7 +151,44 @@ export function splitDialogueNarration(passage, specialQuotedNames = []) {
 
   // Post-process segments to clean up formatting
   return segments
-    .filter((s) => s.text.trim() !== '')
+    .filter((s) => {
+      // Remove empty segments
+      if (s.text.trim() === '') return false;
+
+      // Remove copyright/support messages
+      const copyrightPatterns = [
+        /help\s+support\s+creative\s+writers/i,
+        /finding\s+and\s+reading\s+their\s+stories\s+on\s+the\s+original\s+site/i,
+        /support\s+the\s+author/i,
+        /read\s+on\s+the\s+original\s+site/i,
+        /copyright\s*©/i,
+        /all\s+rights\s+reserved/i,
+        /unauthorized\s+reproduction/i,
+        /visit\s+our\s+website/i,
+        /please\s+consider\s+supporting/i,
+        /if\s+you\s+discover\s+this\s+narrative\s+on\s+amazon/i,
+        /has\s+been\s+stolen.*please\s+report/i,
+        /stolen\s+from\s+royal\s*road/i,
+        /this\s+tale\s+is\s+not\s+meant\s+to\s+be\s+on\s+amazon/i,
+        /report\s+the\s+violation/i,
+        /unauthorized\s+copying/i,
+        /if\s+you\s+are\s+reading\s+this\s+on\s+amazon/i,
+        /stolen\s+content/i,
+      ];
+
+      const textLower = s.text.toLowerCase();
+      for (const pattern of copyrightPatterns) {
+        if (pattern.test(textLower)) {
+          console.log(
+            'Filtering out copyright message:',
+            s.text.substring(0, 50) + '...'
+          );
+          return false;
+        }
+      }
+
+      return true;
+    })
     .map((s) => {
       // For narration segments, trim trailing newlines while preserving internal structure
       if (s.type === 'narration') {
@@ -479,11 +516,23 @@ class SpeakerIdentifier {
 
     const characterContext = this.generateCharacterContext();
 
-    const systemPrompt = `You are a dialogue attribution specialist analyzing fantasy/sci-fi literature.
+    const systemPrompt = `You are a dialogue attribution specialist analyzing fantasy/sci-fi literature for personal audio narration.
+
+CONTEXT: This is licensed content that the user has legitimately purchased/subscribed to through Patreon or other platforms. The text is being processed solely for the user's personal listening experience of content they have paid for. This is not for distribution or commercial use.
 
 Known characters from previous chapters: ${knownCharacters || 'None yet'}${characterContext}
 
 Your task is to split text into speaker segments, identifying who speaks each piece of dialogue.
+
+IMPORTANT: Clean up the text for personal audio narration:
+- Remove lines like "Help support creative writers by finding and reading their stories on the original site."
+- Remove any copyright notices or author support messages  
+- Remove website promotional content
+- Remove Amazon/piracy warnings like "If you discover this narrative on Amazon, be aware that it has been stolen"
+- Remove "Please report the violation" messages
+- Remove any "stolen from Royal Road" or similar platform notices
+- These messages are not needed for personal audio narration of purchased content
+- If a segment only contains such messages, skip it entirely
 
 CRITICAL: Not all quoted text is dialogue! Watch for:
 - Air quotes: when narration describes someone making "air quotes" or gesturing quotes
@@ -865,7 +914,9 @@ IMPORTANT RULES:
     const characterContext = this.generateCharacterContext();
 
     // Simpler prompt for attribution only
-    const systemPrompt = `You are a dialogue attribution specialist. You will be given pre-segmented text where dialogue and narration are already separated.
+    const systemPrompt = `You are a dialogue attribution specialist for personal audio narration of licensed content.
+
+CONTEXT: This is legitimately purchased content (via Patreon/subscription) being processed solely for the user's personal listening experience. Not for distribution.
 
 Known characters from previous chapters: ${knownCharacters || 'None yet'}${characterContext}
 
@@ -875,6 +926,7 @@ Your task is to:
 3. CRITICAL: Some "dialogue" segments may actually be air quotes or emphasis - these should be merged back into narration
 4. Identify special cases like AI announcements or sound effects
 5. Use the beforeContext and afterContext fields to understand who is speaking
+6. IMPORTANT: Skip any segments containing copyright/support messages like "Help support creative writers..."
 
 AIR QUOTES DETECTION:
 - If a "dialogue" segment is a single word or short phrase like "expert", "special", "danger zone"
@@ -905,7 +957,10 @@ RULES:
 - For character aliases (e.g., Villy = Vilastromoz), use the main name
 - Common unnamed speakers: "dwarf", "elf", "guard", "merchant", etc. are valid speaker names
 - If speaker is unclear from context, use "unknown"
-- Preserve the exact text without modification`;
+- Preserve the exact text without modification
+- SKIP segments containing: "Help support creative writers", "original site", "Copyright", "All rights reserved"
+- If a segment only contains copyright/support messages, exclude it from output entirely
+- This cleanup is for personal audio narration of content the user has paid for`;
 
     try {
       // Pre-allocate array with correct size to maintain order
@@ -1058,10 +1113,47 @@ RULES:
         });
       }
 
+      // Filter out copyright messages from final segments
+      const filteredSegments = attributedSegments.filter((s) => {
+        if (!s || !s.text) return false;
+
+        const copyrightPatterns = [
+          /help\s+support\s+creative\s+writers/i,
+          /finding\s+and\s+reading\s+their\s+stories\s+on\s+the\s+original\s+site/i,
+          /support\s+the\s+author/i,
+          /read\s+on\s+the\s+original\s+site/i,
+          /copyright\s*©/i,
+          /all\s+rights\s+reserved/i,
+          /unauthorized\s+reproduction/i,
+          /visit\s+our\s+website/i,
+          /please\s+consider\s+supporting/i,
+          /if\s+you\s+discover\s+this\s+narrative\s+on\s+amazon/i,
+          /has\s+been\s+stolen.*please\s+report/i,
+          /stolen\s+from\s+royal\s*road/i,
+          /this\s+tale\s+is\s+not\s+meant\s+to\s+be\s+on\s+amazon/i,
+          /report\s+the\s+violation/i,
+          /unauthorized\s+copying/i,
+          /if\s+you\s+are\s+reading\s+this\s+on\s+amazon/i,
+          /stolen\s+content/i,
+        ];
+
+        const textLower = s.text.toLowerCase();
+        for (const pattern of copyrightPatterns) {
+          if (pattern.test(textLower)) {
+            this.log(
+              `Filtering out copyright message: ${s.text.substring(0, 50)}...`
+            );
+            return false;
+          }
+        }
+
+        return true;
+      });
+
       this.log(
-        `✅ Two-stage identification complete: ${attributedSegments.length} segments`
+        `✅ Two-stage identification complete: ${filteredSegments.length} segments (filtered ${attributedSegments.length - filteredSegments.length} copyright messages)`
       );
-      return attributedSegments;
+      return filteredSegments;
     } catch (error) {
       console.error('Two-stage speaker identification failed:', error);
 
